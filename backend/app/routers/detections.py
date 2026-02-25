@@ -4,9 +4,9 @@ from typing import List
 from datetime import datetime
 from fastapi.responses import FileResponse, StreamingResponse
 import os
-
 from ..models.database import DetectionLog, get_db
 from ..models.schemas import DetectionLogCreate, DetectionLogResponse
+
 
 router = APIRouter(prefix="/detections", tags=["detections"])
 
@@ -24,74 +24,74 @@ def get_video_url(request: Request, detection_id: int) -> str | None:
     base_url = str(request.base_url).rstrip('/')
     return f"{base_url}/api/v1/detections/{detection_id}/video"
 
-@router.post("/log", response_model=DetectionLogResponse)
-def log_detection(
-    request: Request,
-    person_data: DetectionLogCreate, 
-    db: Session = Depends(get_db)
-):
-    """Log a face detection"""
-    db_log = DetectionLog(
-        person=person_data.person,
-        confidence=person_data.confidence,
-        face_image_path=getattr(person_data, 'face_image_path', None),
-        detection_time=datetime.now()
-    )
-    db.add(db_log)
-    db.commit()
-    db.refresh(db_log)
+# @router.post("/log", response_model=DetectionLogResponse)
+# def log_detection(
+#     request: Request,
+#     person_data: DetectionLogCreate, 
+#     db: Session = Depends(get_db)
+# ):
+#     """Log a face detection"""
+#     db_log = DetectionLog(
+#         person=person_data.person,
+#         confidence=person_data.confidence,
+#         face_image_path=getattr(person_data, 'face_image_path', None),
+#         detection_time=datetime.now()
+#     )
+#     db.add(db_log)
+#     db.commit()
+#     db.refresh(db_log)
     
-    return DetectionLogResponse(
-        id=db_log.id,
-        person=db_log.person,
-        confidence=float(db_log.confidence) if db_log.confidence else None,
-        detection_time=db_log.detection_time,
-        face_image_url=get_face_image_url(request, db_log.id) if db_log.face_image_path else None,
-        video_url=get_video_url(request, db_log.id) if db_log.video_path else None
-    )
+#     return DetectionLogResponse(
+#         id=db_log.id,
+#         person=db_log.person,
+#         confidence=float(db_log.confidence) if db_log.confidence else None,
+#         detection_time=db_log.detection_time,
+#         face_image_url=get_face_image_url(request, db_log.id) if db_log.face_image_path else None,
+#         video_url=get_video_url(request, db_log.id) if db_log.video_path else None
+#     )
 
-@router.get("/logs", response_model=List[DetectionLogResponse])
-def get_logs(request: Request, db: Session = Depends(get_db)):
-    """Get all detection logs"""
-    logs = db.query(DetectionLog).order_by(DetectionLog.detection_time.desc()).all()
+# @router.get("/logs", response_model=List[DetectionLogResponse])
+# def get_logs(request: Request, db: Session = Depends(get_db)):
+#     """Get all detection logs"""
+#     logs = db.query(DetectionLog).order_by(DetectionLog.detection_time.desc()).all()
     
-    return [
-        DetectionLogResponse(
-            id=log.id,
-            person=log.person,
-            confidence=float(log.confidence) if log.confidence else None,
-            detection_time=log.detection_time,
-            face_image_url=get_face_image_url(request, log.id) if log.face_image_path else None,
-            video_url=get_video_url(request, log.id) if log.video_path else None
-        )
-        for log in logs
-    ]
+#     return [
+#         DetectionLogResponse(
+#             id=log.id,
+#             person=log.person,
+#             confidence=float(log.confidence) if log.confidence else None,
+#             detection_time=log.detection_time,
+#             face_image_url=get_face_image_url(request, log.id) if log.face_image_path else None,
+#             video_url=get_video_url(request, log.id) if log.video_path else None
+#         )
+#         for log in logs
+#     ]
 
-@router.get("", response_model=List[DetectionLogResponse])
-async def get_detections(
-    request: Request,
-    skip: int = 0, 
-    limit: int = 100, 
-    db: Session = Depends(get_db)
-):
-    """Get paginated detections"""
-    detections = db.query(DetectionLog)\
-        .order_by(DetectionLog.detection_time.desc())\
-        .offset(skip)\
-        .limit(limit)\
-        .all()
+# @router.get("", response_model=List[DetectionLogResponse])
+# async def get_detections(
+#     request: Request,
+#     skip: int = 0, 
+#     limit: int = 100, 
+#     db: Session = Depends(get_db)
+# ):
+#     """Get paginated detections"""
+#     detections = db.query(DetectionLog)\
+#         .order_by(DetectionLog.detection_time.desc())\
+#         .offset(skip)\
+#         .limit(limit)\
+#         .all()
     
-    return [
-        DetectionLogResponse(
-            id=detection.id,
-            person=detection.person,
-            confidence=float(detection.confidence) if detection.confidence else None,
-            detection_time=detection.detection_time,
-            face_image_url=get_face_image_url(request, detection.id) if detection.face_image_path else None,
-            video_url=get_video_url(request, detection.id) if detection.video_path else None
-        )
-        for detection in detections
-    ]
+#     return [
+#         DetectionLogResponse(
+#             id=detection.id,
+#             person=detection.person,
+#             confidence=float(detection.confidence) if detection.confidence else None,
+#             detection_time=detection.detection_time,
+#             face_image_url=get_face_image_url(request, detection.id) if detection.face_image_path else None,
+#             video_url=get_video_url(request, detection.id) if detection.video_path else None
+#         )
+#         for detection in detections
+#     ]
 
 @router.get("/{detection_id}/face")
 async def get_detection_face(detection_id: int, db: Session = Depends(get_db)):

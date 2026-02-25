@@ -245,10 +245,13 @@ function formatLogEntry(log) {
         imageHtml = `<div class="no-image">No Image</div>`;
     }
 
+    // Use full_name if available, otherwise fall back to person (national code)
+    const displayName = log.full_name || log.person;
+
     // Add video indicator if video URL exists
     let videoIndicator = '';
     if (log.video_url) {
-        videoIndicator = `<span class="video-indicator" onclick="playVideo('${log.video_url}', '${log.person}', '${log.detection_time}'); event.stopPropagation()">▶</span>`;
+        videoIndicator = `<span class="video-indicator" onclick="playVideo('${log.video_url}', '${displayName}', '${log.detection_time}'); event.stopPropagation()">▶</span>`;
     }
 
     const d = new Date(log.detection_time);
@@ -256,11 +259,11 @@ function formatLogEntry(log) {
     const date = d.toLocaleDateString();
 
     return `
-        <div class="log-entry" id="log-${log.id}" onclick="playVideo('${log.video_url}', '${log.person}', '${log.detection_time}')">
+        <div class="log-entry" id="log-${log.id}" onclick="playVideo('${log.video_url}', '${displayName}', '${log.detection_time}')">
             ${imageHtml}
             <div style="flex:1;">
                 <div style="display: flex; align-items: center;">
-                    <div class="person-name">${log.person}</div>
+                    <div class="person-name">${displayName}</div>
                     ${videoIndicator}
                 </div>
                 <div class="confidence">
