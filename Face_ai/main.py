@@ -30,7 +30,16 @@ SKELETON = [
     (5, 11), (6, 12)
 ]
 
-
+skeleton_edges = [
+    # (0,1),(0,2),(1,3),(2,4),            # head
+    # (0,5),(0,6),                         # nose to shoulders
+    (5,7),(7,9),                          # left arm
+    (6,8),(8,10),                         # right arm
+    (5,11),(6,12),                        # shoulders to hips
+    (11,12),                               # hip line
+    (11,13),(13,15),                       # left leg
+    (12,14),(14,16)                        # right leg
+]
 
 def point_inside_box(x, y, box):
     x1, y1, x2, y2 = box
@@ -338,14 +347,7 @@ def draw(frame, face_bbox, face_landmarks, human_keypoints, collocation):
             x_kpt = int(kpts[i][0] * scale_x)
             y_kpt = int(kpts[i][1] * scale_y)
 
-       
-            if x_kpt > 0 and y_kpt > 0:
-                cv2.circle(output_frame, (x_kpt, y_kpt), 2, color, -1)
-
         if all(kpts[i][0] > 0 for i in important_points):
-            # nose = (int(kpts[0][0]), int(kpts[0][1]))
-            # left_eye = (int(kpts[1][0]), int(kpts[1][1]))
-            # right_eye = (int(kpts[2][0]), int(kpts[2][1]))
             nose = (
                 int(kpts[0][0] * scale_x),
                 int(kpts[0][1] * scale_y)
@@ -362,6 +364,28 @@ def draw(frame, face_bbox, face_landmarks, human_keypoints, collocation):
             )
             cv2.line(output_frame, nose, left_eye, color, 1)
             cv2.line(output_frame, nose, right_eye, color, 1)
+
+
+        for i, (x, y) in enumerate(kpts):
+            x = int(x * scale_x)
+            y = int(y * scale_y)
+            if x > 0 and y > 0:
+                cv2.circle(output_frame, (x, y), 3, (255, 0, 0), -1)
+
+        # draw skeleton lines
+        for start_idx, end_idx in skeleton_edges:
+            x1, y1 = kpts[start_idx]
+            x2, y2 = kpts[end_idx]
+
+            x1 = int(x1 * scale_x)
+            y1 = int(y1 * scale_y)
+            x2 = int(x2 * scale_x)
+            y2 = int(y2 * scale_y)
+
+            if x1 > 0 and y1 > 0 and x2 > 0 and y2 > 0:
+                cv2.line(output_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+
 
     return output_frame
 
