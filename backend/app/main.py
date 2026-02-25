@@ -1,46 +1,40 @@
+# Standard library imports
 import os
+import time
+import uuid
 import base64
+import shutil
+import zipfile
 import asyncio
-from typing import Optional, Set, Dict
-from collections import defaultdict, deque, Counter
+import tempfile
+import traceback
+from io import BytesIO
 from pathlib import Path
+from datetime import datetime, date
+from typing import Optional, Set
+from collections import defaultdict, deque, Counter
+
+# Third-party imports
 import cv2
 import av
-from datetime import datetime, date, time
-import time  # Add this line
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, WebSocket, Depends, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import (
     get_redoc_html,
     get_swagger_ui_html,
     get_swagger_ui_oauth2_redirect_html,
 )
-import uuid  # Add this import
-
-import zipfile
-import tempfile
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi import Form  # If needed
-import zipfile
-from io import BytesIO  # IMPORT THIS!
-import tempfile
-from pathlib import Path
-import cv2
-import numpy as np
-import os
-from typing import List, Optional  # If needed
-from .models.database import DetectionLog, get_db, Personnel, PersonnelImage, FACE_STORAGE_DIR
-
 from fastapi.staticfiles import StaticFiles
-from fastapi import FastAPI, WebSocket, Depends, HTTPException, WebSocketDisconnect, File, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from .models.database import save_detection_with_face, get_db, DetectionLog, Personnel
-from .api import router as api_router
-# from Detection.TensorRT.infer import ws_transfer, vectorDatabase, removeDatabase
-from io import BytesIO  # IMPORT THIS!
+from sqlalchemy.orm import Session, joinedload
 
+# Local application imports
+from .models.database import DetectionLog, get_db, Personnel, PersonnelImage, FACE_STORAGE_DIR, save_detection_with_face
+from .api import router as api_router
 from Face_ai.main import FrameProcessing, FaceEmbedding
+
+
 
 
 
@@ -256,11 +250,6 @@ track_history = defaultdict(lambda: {
     "faces": deque(maxlen=VOTE_WINDOW),
     "frames": deque(maxlen=VOTE_WINDOW),
 })
-
-
-
-
-
 
 
 async def video_broadcaster():
@@ -531,14 +520,6 @@ async def save_in_database():
         db.close()
 
 
-@app.get("/connections/status")
-async def connection_status():
-    """Get current connection statistics"""
-    return {
-        "active_connections": manager.count,  # Changed from connection_count to count
-        "status": "healthy"
-    }
-
 
 @app.on_event("startup")
 async def startup_event():
@@ -566,64 +547,6 @@ async def shutdown_event():
 
 
 
-
-
-
-# Define Pydantic model for request body
-class SaveRequest(BaseModel):
-    id: int
-    name_front: str
-
-# @app.post("/ws-save")
-# async def save_detection(
-#     request: SaveRequest,
-#     db: Session = Depends(get_db)
-# ):
-#     """Save a detection to the vector database"""
-#     print(f'Processing save request for ID: {request.id}, name: {request.name_front}')
-    
-#     try:
-#         # Get detection log
-#         detection_log = db.query(DetectionLog).filter(DetectionLog.id == request.id).first()
-        
-#         if not detection_log:
-#             raise HTTPException(status_code=404, detail=f"Detection log with ID {request.id} not found")
-        
-#         if not detection_log.face_image_path:
-#             raise HTTPException(status_code=400, detail="No face image path found in this log entry")
-        
-#         if not os.path.exists(detection_log.face_image_path):
-#             raise HTTPException(status_code=404, detail=f"Face image file not found at: {detection_log.face_image_path}")
-        
-#         # Read and process image
-#         img = cv2.imread(detection_log.face_image_path)
-#         if img is None:
-#             raise HTTPException(status_code=500, detail=f"Failed to read image file from: {detection_log.face_image_path}")
-        
-#         # Add to vector database
-#         result = vectorDatabase(img, request.name_front)
-        
-#         # Update the person name
-#         detection_log.person = request.name_front
-#         db.commit()
-        
-#         return {
-#             "success": True,
-#             "message": f"Image added to vector database for {request.name_front}",
-#             "log_id": request.id,
-#             "corrected_person": request.name_front,
-#             "image_shape": img.shape,
-#             "detection_time": detection_log.detection_time.isoformat() if detection_log.detection_time else None
-#         }
-            
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         print(f"Error processing log ID {request.id}: {e}")
-#         import traceback
-#         traceback.print_exc()
-#         raise HTTPException(status_code=500, detail=str(e))
-    
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -759,7 +682,6 @@ async def upload_personnel_zip(
                         file_path = personnel_images_dir / safe_filename
                         
                         # Copy file to permanent storage
-                        import shutil
                         shutil.copy2(str(img_path), file_path)
                         print(f"     💾 Saved to: {file_path}")
                         
@@ -789,7 +711,6 @@ async def upload_personnel_zip(
                         
                     except Exception as e:
                         print(f"  ❌ Error processing {img_path.name}: {str(e)}")
-                        import traceback
                         traceback.print_exc()
                         person_errors += 1
                         error_details.append({
@@ -842,36 +763,6 @@ async def upload_personnel_zip(
     }
 
 
-@app.get("/qd-remove")
-async def qd_remove(
-    # request: SaveRequest,
-    # db: Session = Depends(get_db)
-):
-    # print('id', request.id)
-    # # name_to_ai = dictionary.get(request.name_front)
-    # name_to_ai = request.name_front
-    try:
-        name_to_ai = ['0311344119']
-        result = removeDatabase(name_to_ai)
-   
-        return {
-            "success": True,
-            "message": f"Image added to vector database for {name_to_ai}",
-            # "log_id": request.id,
-            "corrected_person": name_to_ai,
-            "vector_database_result": result if result else "Success",
-        }
-            
-    except Exception as e:
-        # print(f"Error processing log ID {request.id}: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
-    finally:
-        print('Processing complete')
-    
-    
-    
     
     
     
