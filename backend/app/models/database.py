@@ -16,17 +16,17 @@ FACE_STORAGE_DIR = Path("saved_media")
 FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
 
 # Use localhost - this ALWAYS works on the same machine
-# params = urllib.parse.quote_plus(
-#     "DRIVER={ODBC Driver 17 for SQL Server};"
-#     "SERVER=localhost\\sql,1433;"
-#     "DATABASE=AI_DB;"
-#     "UID=sa;"
-#     "PWD=Asd@12345;"
-#     "TrustServerCertificate=yes;"
-#     "Connection Timeout=30;"
-# )
+params = urllib.parse.quote_plus(
+    "DRIVER={ODBC Driver 17 for SQL Server};"
+    "SERVER=localhost\\sql,1433;"
+    "DATABASE=AI_DB;"
+    "UID=sa;"
+    "PWD=Asd@12345;"
+    "TrustServerCertificate=yes;"
+    "Connection Timeout=30;"
+)
 
-# DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
+DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
 
 # # server database
 # params = urllib.parse.quote_plus(
@@ -45,18 +45,18 @@ FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
 
 
 # Hossein database
-params = urllib.parse.quote_plus(
-    "DRIVER={ODBC Driver 17 for SQL Server};"
-    "SERVER=127.0.0.1,14330;"  # Remote server IP with port
-    "DATABASE=HR_DB_20;"             # 
-    "UID=sa;"
-    "PWD=Asd@12345;"
-    "TrustServerCertificate=yes;"     # Keep this for self-signed certs
-    "Encrypt=yes;"                    # Added encryption
-    "Connection Timeout=30;"
-)
+# params = urllib.parse.quote_plus(
+#     "DRIVER={ODBC Driver 17 for SQL Server};"
+#     "SERVER=127.0.0.1,14330;"  # Remote server IP with port
+#     "DATABASE=HR_DB_20;"             # 
+#     "UID=sa;"
+#     "PWD=Asd@12345;"
+#     "TrustServerCertificate=yes;"     # Keep this for self-signed certs
+#     "Encrypt=yes;"                    # Added encryption
+#     "Connection Timeout=30;"
+# )
 
-DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
+# DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
 
 
 

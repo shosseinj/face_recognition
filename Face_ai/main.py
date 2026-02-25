@@ -409,7 +409,7 @@ def camera_processing(USE_WEBCAM, cap, container,  COLLECTION):
         cap.release()
     cv2.destroyAllWindows()
 
-def FaceEmbedding(frame, person_name, COLLECTION, img_ref_id= None ):
+def FaceEmbedding(frame, person_name, ref_img_id=None):
     bbox_face, landmarks = faceDetection(frame,  trt_manager)
     # cv2.namedWindow('Frame', cv2.WINDOW_NORMAL)
     # cv2.namedWindow(f'Face {person_name}', cv2.WINDOW_NORMAL)
@@ -417,17 +417,17 @@ def FaceEmbedding(frame, person_name, COLLECTION, img_ref_id= None ):
 
     for face_box, landmark in zip(bbox_face, landmarks):
 
-        embedding = face_embedding(frame, face_box, landmark)
+        embedding, rec_score  = face_embedding(frame, face_box, landmark)
 
         client.upsert(
-        collection_name=COLLECTION,
+        collection_name='n12',
         points=[
             PointStruct(
                 id=str(uuid.uuid4()),
                 vector=embedding.tolist(),
                 payload={
                     "person": person_name,
-                    "img_ref_id": img_ref_id
+                    "ref_img_id": ref_img_id
                         }
                     )])
                 
@@ -447,7 +447,7 @@ def FaceDecoding(frame, person_name, COLLECTION):
     while True:
         for face_box, landmark in zip(bbox_face, landmarks):
         
-            embedding = face_embedding(frame, face_box, landmark)
+            embedding, rec_score  = face_embedding(frame, face_box, landmark)
             person, rec_score = face_decoding(embedding, COLLECTION)
 
             

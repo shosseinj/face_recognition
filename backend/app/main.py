@@ -40,7 +40,7 @@ from .api import router as api_router
 # from Detection.TensorRT.infer import ws_transfer, vectorDatabase, removeDatabase
 from io import BytesIO  # IMPORT THIS!
 
-from Face_ai.main import FrameProcessing
+from Face_ai.main import FrameProcessing, FaceEmbedding
 
 
 
@@ -574,55 +574,55 @@ class SaveRequest(BaseModel):
     id: int
     name_front: str
 
-@app.post("/ws-save")
-async def save_detection(
-    request: SaveRequest,
-    db: Session = Depends(get_db)
-):
-    """Save a detection to the vector database"""
-    print(f'Processing save request for ID: {request.id}, name: {request.name_front}')
+# @app.post("/ws-save")
+# async def save_detection(
+#     request: SaveRequest,
+#     db: Session = Depends(get_db)
+# ):
+#     """Save a detection to the vector database"""
+#     print(f'Processing save request for ID: {request.id}, name: {request.name_front}')
     
-    try:
-        # Get detection log
-        detection_log = db.query(DetectionLog).filter(DetectionLog.id == request.id).first()
+#     try:
+#         # Get detection log
+#         detection_log = db.query(DetectionLog).filter(DetectionLog.id == request.id).first()
         
-        if not detection_log:
-            raise HTTPException(status_code=404, detail=f"Detection log with ID {request.id} not found")
+#         if not detection_log:
+#             raise HTTPException(status_code=404, detail=f"Detection log with ID {request.id} not found")
         
-        if not detection_log.face_image_path:
-            raise HTTPException(status_code=400, detail="No face image path found in this log entry")
+#         if not detection_log.face_image_path:
+#             raise HTTPException(status_code=400, detail="No face image path found in this log entry")
         
-        if not os.path.exists(detection_log.face_image_path):
-            raise HTTPException(status_code=404, detail=f"Face image file not found at: {detection_log.face_image_path}")
+#         if not os.path.exists(detection_log.face_image_path):
+#             raise HTTPException(status_code=404, detail=f"Face image file not found at: {detection_log.face_image_path}")
         
-        # Read and process image
-        img = cv2.imread(detection_log.face_image_path)
-        if img is None:
-            raise HTTPException(status_code=500, detail=f"Failed to read image file from: {detection_log.face_image_path}")
+#         # Read and process image
+#         img = cv2.imread(detection_log.face_image_path)
+#         if img is None:
+#             raise HTTPException(status_code=500, detail=f"Failed to read image file from: {detection_log.face_image_path}")
         
-        # Add to vector database
-        result = vectorDatabase(img, request.name_front)
+#         # Add to vector database
+#         result = vectorDatabase(img, request.name_front)
         
-        # Update the person name
-        detection_log.person = request.name_front
-        db.commit()
+#         # Update the person name
+#         detection_log.person = request.name_front
+#         db.commit()
         
-        return {
-            "success": True,
-            "message": f"Image added to vector database for {request.name_front}",
-            "log_id": request.id,
-            "corrected_person": request.name_front,
-            "image_shape": img.shape,
-            "detection_time": detection_log.detection_time.isoformat() if detection_log.detection_time else None
-        }
+#         return {
+#             "success": True,
+#             "message": f"Image added to vector database for {request.name_front}",
+#             "log_id": request.id,
+#             "corrected_person": request.name_front,
+#             "image_shape": img.shape,
+#             "detection_time": detection_log.detection_time.isoformat() if detection_log.detection_time else None
+#         }
             
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error processing log ID {request.id}: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         print(f"Error processing log ID {request.id}: {e}")
+#         import traceback
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=str(e))
     
 
 @app.exception_handler(Exception)
@@ -775,8 +775,9 @@ async def upload_personnel_zip(
                         
                         # Save to vector database with ref_img_id
                         print(f"     🔄 Adding to vector database with ref_img_id: {db_image.id}")
-                        vectorDatabase(img, national_code, save_mode=True, ref_img_id=db_image.id)
+                        # vectorDatabase(img, national_code, save_mode=True, ref_img_id=db_image.id)
                         
+                        FaceEmbedding(img, national_code, ref_img_id=db_image.id)
                         saved_images.append({
                             "id": db_image.id,
                             "file_name": safe_filename,

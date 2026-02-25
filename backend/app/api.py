@@ -14,7 +14,7 @@ from .models.schemas import (
     PersonnelImageCreate, PersonnelImageResponse, PersonnelWithImages
 )
 import uuid  # Add this import
-
+from Face_ai.main import FaceEmbedding
 from .routers import personnel
 from fastapi import APIRouter, Depends, Request, Query, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
@@ -266,7 +266,9 @@ async def create_personnel_from_log(
         
         # Create points in vector database with the image ID
         # vectorDatabase(img, national_code, save_mode=True, ref_img_id=db_image.id)
-        
+
+        FaceEmbedding(img, national_code, ref_img_id=db_image.id)
+
         saved_images.append(db_image)
         # Commit all changes
         db.commit()
@@ -470,28 +472,8 @@ async def create_personnel_with_images(
     if not images or len(images) == 0:
         raise HTTPException(status_code=400, detail="حد اقل یک تصویر نیاز است!")
     
-    # Validate file types
-    allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
-    for image in images:
-        file_extension = os.path.splitext(image.filename)[1].lower()
-        if file_extension not in allowed_extensions:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"نوع داده غیر مجاز!'{image.filename}'انواع داده مجاز: {', '.join(allowed_extensions)}"
-            )
-        contents = await image.read()
-        nparr = np.frombuffer(contents, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise HTTPException(status_code=400, detail=f"Could not read image: {image.filename}")
-        
-        # creating points in vector database
-        # vectorDatabase(img, national_code, save_mode=True)
-        await image.seek(0)
-
-    
-    # Create new personnel
-    db_personnel = Personnel(
+    # First, create the personnel record
+    new_personnel = Personnel(
         fname=fname,
         lname=lname,
         national_code=national_code,
@@ -499,83 +481,191 @@ async def create_personnel_with_images(
         department=department
     )
     
-    db.add(db_personnel)
-    db.flush()  # This assigns an ID to db_personnel without committing
+    db.add(new_personnel)
+    db.flush()  # This assigns an ID to new_personnel without committing the transaction
     
-    try:
-        # Create personnel images directory
-        personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(db_personnel.id)
-        personnel_images_dir.mkdir(parents=True, exist_ok=True)
-        
-        saved_images = []
-        
-        # Save each image
-        for image in images:
-            # Generate unique filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            file_extension = os.path.splitext(image.filename)[1].lower()
-            safe_filename = f"{fname}_{lname}_{timestamp}_{unique_id}{file_extension}"
-            safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
-            
-            # Save file
-            file_path = personnel_images_dir / safe_filename
-            
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(image.file, buffer)
-            
-            # Create database record for image
-            db_image = PersonnelImage(
-                image_url=str(file_path),
-                personnel_id=db_personnel.id
-            )
-            
-            db.add(db_image)
-            db.flush()  # Get ID for this image
-            saved_images.append(db_image)
-        
-        # Commit all changes
-        db.commit()
-        
-        # Refresh to get updated relationships
-        db.refresh(db_personnel)
-        
-        # Generate URLs for images
-        base_url = str(request.base_url).rstrip('/')
-        images_response = []
-        
-        for img in saved_images:
-            images_response.append(
-                PersonnelImageResponse(
-                    id=img.id,
-                    image_url=f"{base_url}/api/v1/personnel/{db_personnel.id}/images/{img.id}/file",
-                    personnel_id=img.personnel_id,
-                    uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
-                )
+    # Create personnel images directory
+    personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(new_personnel.id)
+    personnel_images_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Validate file types and save images
+    allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+    saved_images = []  # This will store the actual database objects
+    
+    for image in images:
+        file_extension = os.path.splitext(image.filename)[1].lower()
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"نوع داده غیر مجاز!'{image.filename}'انواع داده مجاز: {', '.join(allowed_extensions)}"
             )
         
-        return PersonnelWithImages(
-            id=db_personnel.id,
-            fname=db_personnel.fname,
-            lname=db_personnel.lname,
-            national_code=db_personnel.national_code,
-            staff=db_personnel.staff,
-            department=db_personnel.department,
-            created_at=db_personnel.created_at,
-            images=images_response
+        # Read and validate image
+        contents = await image.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(status_code=400, detail=f"Could not read image: {image.filename}")
+        
+        # Generate filename for saving
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        safe_filename = f"{fname}_{timestamp}_{unique_id}{file_extension}"
+        safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
+        
+        file_path = personnel_images_dir / safe_filename
+        
+        # Save image to disk
+        cv2.imwrite(str(file_path), img)
+        
+        # Create image record in database
+        db_image = PersonnelImage(
+            image_url=str(file_path),
+            personnel_id=new_personnel.id
         )
+        db.add(db_image)
+        db.flush()  # Get the image ID
         
-    except Exception as e:
-        # Rollback database changes
-        db.rollback()
+        print(f"🆔 Database record created with ID: {db_image.id}")
         
-        # Clean up any saved files
-        if 'personnel_images_dir' in locals() and personnel_images_dir.exists():
-            shutil.rmtree(personnel_images_dir)
+        # Now call FaceEmbedding with the image ID
+        FaceEmbedding(img, national_code, ref_img_id=db_image.id)
         
-        print(f"Error creating personnel with images: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create personnel: {str(e)}")
+        # Append the database object, not a dictionary
+        saved_images.append(db_image)
+        
+        await image.seek(0)  # Reset file pointer
     
+    # Commit all changes
+    db.commit()
+    
+    # Refresh to get updated relationships
+    db.refresh(new_personnel)
+    
+    print(f"✅ Successfully created personnel {national_code} with {len(saved_images)} images")
+    
+    # Return the created personnel with images
+    return PersonnelWithImages(
+        id=new_personnel.id,
+        fname=new_personnel.fname,
+        lname=new_personnel.lname,
+        national_code=new_personnel.national_code,
+        staff=new_personnel.staff,
+        department=new_personnel.department,
+        images=saved_images  # Now passing actual objects, not dictionaries
+    )
+
+
+
+    # # Validate file types
+    # allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+    # for image in images:
+    #     file_extension = os.path.splitext(image.filename)[1].lower()
+    #     if file_extension not in allowed_extensions:
+    #         raise HTTPException(
+    #             status_code=400, 
+    #             detail=f"نوع داده غیر مجاز!'{image.filename}'انواع داده مجاز: {', '.join(allowed_extensions)}"
+    #         )
+    #     contents = await image.read()
+    #     nparr = np.frombuffer(contents, np.uint8)
+    #     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    #     if img is None:
+    #         raise HTTPException(status_code=400, detail=f"Could not read image: {image.filename}")
+        
+    #     # creating points in vector database
+    #     # vectorDatabase(img, national_code, save_mode=True)
+    #     FaceEmbedding(img, national_code, ref_img_id=***)
+
+    #     await image.seek(0)
+
+    
+    # # Create new personnel
+    # db_personnel = Personnel(
+    #     fname=fname,
+    #     lname=lname,
+    #     national_code=national_code,
+    #     staff=staff,
+    #     department=department
+    # )
+    
+    # db.add(db_personnel)
+    # db.flush()  # This assigns an ID to db_personnel without committing
+    
+    # try:
+    #     # Create personnel images directory
+    #     personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(db_personnel.id)
+    #     personnel_images_dir.mkdir(parents=True, exist_ok=True)
+        
+    #     saved_images = []
+        
+    #     # Save each image
+    #     for image in images:
+    #         # Generate unique filename
+    #         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #         unique_id = str(uuid.uuid4())[:8]
+    #         file_extension = os.path.splitext(image.filename)[1].lower()
+    #         safe_filename = f"{fname}_{lname}_{timestamp}_{unique_id}{file_extension}"
+    #         safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
+            
+    #         # Save file
+    #         file_path = personnel_images_dir / safe_filename
+            
+    #         with open(file_path, "wb") as buffer:
+    #             shutil.copyfileobj(image.file, buffer)
+            
+    #         # Create database record for image
+    #         db_image = PersonnelImage(
+    #             image_url=str(file_path),
+    #             personnel_id=db_personnel.id
+    #         )
+            
+    #         db.add(db_image)
+    #         db.flush()  # Get ID for this image
+    #         saved_images.append(db_image)
+        
+    #     # Commit all changes
+    #     db.commit()
+        
+    #     # Refresh to get updated relationships
+    #     db.refresh(db_personnel)
+        
+    #     # Generate URLs for images
+    #     base_url = str(request.base_url).rstrip('/')
+    #     images_response = []
+        
+    #     for img in saved_images:
+    #         images_response.append(
+    #             PersonnelImageResponse(
+    #                 id=img.id,
+    #                 image_url=f"{base_url}/api/v1/personnel/{db_personnel.id}/images/{img.id}/file",
+    #                 personnel_id=img.personnel_id,
+    #                 uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
+    #             )
+    #         )
+        
+    #     return PersonnelWithImages(
+    #         id=db_personnel.id,
+    #         fname=db_personnel.fname,
+    #         lname=db_personnel.lname,
+    #         national_code=db_personnel.national_code,
+    #         staff=db_personnel.staff,
+    #         department=db_personnel.department,
+    #         created_at=db_personnel.created_at,
+    #         images=images_response
+    #     )
+        
+    # except Exception as e:
+    #     # Rollback database changes
+    #     db.rollback()
+        
+    #     # Clean up any saved files
+    #     if 'personnel_images_dir' in locals() and personnel_images_dir.exists():
+    #         shutil.rmtree(personnel_images_dir)
+        
+    #     print(f"Error creating personnel with images: {e}")
+    #     raise HTTPException(status_code=500, detail=f"Failed to create personnel: {str(e)}")
+    
+
 
 
 
@@ -592,6 +682,8 @@ async def add_images_to_personnel(
     Add multiple images to an existing personnel
     """
     # Check if personnel exists
+    print('######################hi')
+
     personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
     if not personnel:
         raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
@@ -657,7 +749,7 @@ async def add_images_to_personnel(
             # Now add to vector database with ref_img_id
             try:
                 # Use the stored image data
-                # vectorDatabase(image.img_data, personnel.national_code, save_mode=True, ref_img_id=db_image.id)
+                FaceEmbedding(image.img_data, personnel.national_code, ref_img_id=db_image.id)
                 print(f"✅ Added to vector DB with ref_img_id: {db_image.id}")
             except Exception as e:
                 print(f"⚠️ Warning: Vector DB insertion failed for image {db_image.id}: {e}")
@@ -783,7 +875,7 @@ async def delete_personnel(
         
         try:
             from qdrant_client.http import models
-            from Detection.TensorRT.infer import client
+            # from Detection.TensorRT.infer import client
             
             print(f"   Qdrant client: {client}")
             print(f"   Collection: n5")

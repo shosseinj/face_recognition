@@ -6,7 +6,9 @@ from ..models.schemas import Personnel as PersonnelSchema, PersonnelCreate, Pers
 router = APIRouter(prefix="/personnel", tags=["personnel"])
 from ..models.database import PersonnelImage
 from pathlib import Path
-    
+from qdrant_client.http import models
+# from Detection.TensorRT.infer import client
+
     
 @router.post("/", response_model=PersonnelSchema, status_code=status.HTTP_201_CREATED)
 def create_personnel(personnel: PersonnelCreate, db: Session = Depends(get_db)):
@@ -144,22 +146,8 @@ async def delete_personnel_image(
 
 
 def delete_faces_from_vector_database(ref_img_id: int, collection_name: str = "n5") -> bool:
-    print('********3333333')
-    """
-    Delete all face embeddings with the given ref_img_id from Qdrant
-    
-    Args:
-        ref_img_id: The reference image ID stored in payload
-        collection_name: Qdrant collection name
-    
-    Returns:
-        bool: True if successful, False otherwise
-    """
+
     try:
-        from qdrant_client.http import models
-        from Detection.TensorRT.infer import client
-        
-        # Create filter for ref_img_id
         filter_condition = models.Filter(
             must=[
                 models.FieldCondition(
@@ -176,7 +164,6 @@ def delete_faces_from_vector_database(ref_img_id: int, collection_name: str = "n
         )
         print(f"   Found {count_result.count} points in vector DB for ref_img_id: {ref_img_id}")
         
-        # Delete the points
         delete_result = client.delete(
             collection_name=collection_name,
             points_selector=models.FilterSelector(
