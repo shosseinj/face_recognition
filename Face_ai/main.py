@@ -1,14 +1,14 @@
-from source.human_detection import tracking_human_detected
+from Face_ai.source.human_detection import tracking_human_detected
 import cv2
 import av
-from source.face_detection import faceDetection
-from source.trt_manager import TensorRTManager
+from Face_ai.source.face_detection import faceDetection
+from Face_ai.source.trt_manager import TensorRTManager
 from qdrant_client import QdrantClient
 from pathlib import Path
 import numpy as np
 from qdrant_client.models import PointStruct
 import uuid
-from ByteTracker.byte_tracker import BYTETracker
+from Face_ai.ByteTracker.byte_tracker import BYTETracker
 from insightface.utils import face_align
 
 frame_id = 0 
@@ -137,7 +137,18 @@ def draw(frame, face_bbox, face_landmarks, human_keypoints, collocation):
     face_results = {}
 
     for face_box, landmark in zip(face_bbox, face_landmarks):
-        embedding, rec_score = face_embedding(frame, face_box, landmark)
+        h, w = frame.shape[:2]
+
+        x1 = max(0, min(int(face_box[0]), w - 1))
+        y1 = max(0, min(int(face_box[1]), h - 1))
+        x2 = max(0, min(int(face_box[2]), w - 1))
+        y2 = max(0, min(int(face_box[3]), h - 1))
+
+        fixed_box = [x1, y1, x2, y2]
+
+        embedding, rec_score = face_embedding(frame, fixed_box, landmark)
+
+
         x1_f, y1_f, x2_f, y2_f = map(int, face_box[:4])
 
         if embedding is None:
@@ -483,61 +494,76 @@ FACE_ENCODING = False
 FACE_DECODING = False
 COLLECTION = 'n12'
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
 
 
-    if CAMERA_PROCESSING:
-        if USE_WEBCAM:
-            cap = cv2.VideoCapture(0)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-            if not cap.isOpened():
-                print("❌ Cannot open webcam")
-                exit()
-            print("✅ Webcam started")
+#     if CAMERA_PROCESSING:
+#         if USE_WEBCAM:
+#             cap = cv2.VideoCapture(0)
+#             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+#             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+#             if not cap.isOpened():
+#                 print("❌ Cannot open webcam")
+#                 exit()
+#             print("✅ Webcam started")
 
-        else:
-            try:
-                container = av.open(
-                    RTSP_URL,
-                    options={
-                        "rtsp_transport": "tcp",
-                        "max_delay": "1000000"
-                    }
-                )
-                print("✅ Connected to RTSP stream")
-            except Exception as e:
-                print("❌ RTSP connection failed:", e)
-                exit()
-        camera_processing(USE_WEBCAM, cap, container,  COLLECTION)
-    if FACE_ENCODING:
-        IMAGE_ROOT = "./qdrant_images"
-        root = Path(IMAGE_ROOT)
+#         else:
+#             try:
+#                 container = av.open(
+#                     RTSP_URL,
+#                     options={
+#                         "rtsp_transport": "tcp",
+#                         "max_delay": "1000000"
+#                     }
+#                 )
+#                 print("✅ Connected to RTSP stream")
+#             except Exception as e:
+#                 print("❌ RTSP connection failed:", e)
+#                 exit()
+#         camera_processing(USE_WEBCAM, cap, container,  COLLECTION)
+#     if FACE_ENCODING:
+#         IMAGE_ROOT = "./qdrant_images"
+#         root = Path(IMAGE_ROOT)
 
-        for person_dir in root.iterdir():
-            if not person_dir.is_dir():
-                print('empttyyyyyyyyyyyyyyyyyyy')
-                continue
-            person_name = person_dir.name
-            print(f"\n📁 Person: {person_name}")
-            for img_path in person_dir.glob("*.*"):
-                    img = cv2.imread(str(img_path))
-                    FaceEmbedding(img , f'{person_name}', COLLECTION)
+#         for person_dir in root.iterdir():
+#             if not person_dir.is_dir():
+#                 print('empttyyyyyyyyyyyyyyyyyyy')
+#                 continue
+#             person_name = person_dir.name
+#             print(f"\n📁 Person: {person_name}")
+#             for img_path in person_dir.glob("*.*"):
+#                     img = cv2.imread(str(img_path))
+#                     FaceEmbedding(img , f'{person_name}', COLLECTION)
 
-    if FACE_DECODING:
-        IMAGE_ROOT = "./qdrant_single"
-        root = Path(IMAGE_ROOT)
+#     if FACE_DECODING:
+#         IMAGE_ROOT = "./qdrant_single"
+#         root = Path(IMAGE_ROOT)
 
-        for person_dir in root.iterdir():
-            if not person_dir.is_dir():
-                print('empttyyyyyyyyyyyyyyyyyyy')
-                continue
-            person_name = person_dir.name
-            print(f"\n📁 Person: {person_name}")
-            for img_path in person_dir.glob("*.*"):
-                    img = cv2.imread(str(img_path))
-                    FaceDecoding(img , f'{person_name}', COLLECTION)
+#         for person_dir in root.iterdir():
+#             if not person_dir.is_dir():
+#                 print('empttyyyyyyyyyyyyyyyyyyy')
+#                 continue
+#             person_name = person_dir.name
+#             print(f"\n📁 Person: {person_name}")
+#             for img_path in person_dir.glob("*.*"):
+#                     img = cv2.imread(str(img_path))
+#                     FaceDecoding(img , f'{person_name}', COLLECTION)
 
 
 
+def FrameProcessing(frame):
+    original_frame = frame.copy()
+    bbox_face, landmarks = faceDetection(frame,  trt_manager)
+
+    
+    human_key= tracking_human_detected(frame_id, original_frame)
+
+    frame = draw(original_frame, bbox_face , landmarks,  human_key, COLLECTION)
+    return {
+    "frame": frame,
+    "persons": [],
+    "scores":[],
+    "faces": [],
+    "objs": []
+}

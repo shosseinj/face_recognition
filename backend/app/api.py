@@ -43,7 +43,7 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
-from Detection.TensorRT.infer import vectorDatabase
+# from Face_ai.main import vectorDatabase
 import cv2
 import numpy as np
 
@@ -265,7 +265,7 @@ async def create_personnel_from_log(
             raise HTTPException(status_code=400, detail=f"Could not read image from log")
         
         # Create points in vector database with the image ID
-        vectorDatabase(img, national_code, save_mode=True, ref_img_id=db_image.id)
+        # vectorDatabase(img, national_code, save_mode=True, ref_img_id=db_image.id)
         
         saved_images.append(db_image)
         # Commit all changes
@@ -486,7 +486,7 @@ async def create_personnel_with_images(
             raise HTTPException(status_code=400, detail=f"Could not read image: {image.filename}")
         
         # creating points in vector database
-        vectorDatabase(img, national_code, save_mode=True)
+        # vectorDatabase(img, national_code, save_mode=True)
         await image.seek(0)
 
     
@@ -657,7 +657,7 @@ async def add_images_to_personnel(
             # Now add to vector database with ref_img_id
             try:
                 # Use the stored image data
-                vectorDatabase(image.img_data, personnel.national_code, save_mode=True, ref_img_id=db_image.id)
+                # vectorDatabase(image.img_data, personnel.national_code, save_mode=True, ref_img_id=db_image.id)
                 print(f"✅ Added to vector DB with ref_img_id: {db_image.id}")
             except Exception as e:
                 print(f"⚠️ Warning: Vector DB insertion failed for image {db_image.id}: {e}")

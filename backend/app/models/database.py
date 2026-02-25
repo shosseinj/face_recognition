@@ -28,10 +28,26 @@ FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
 
 # DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
 
-# server database
+# # server database
+# params = urllib.parse.quote_plus(
+#     "DRIVER={ODBC Driver 17 for SQL Server};"
+#     "SERVER=192.168.110.13,14330;"  # Remote server IP with port
+#     "DATABASE=HR_DB_20;"             # 
+#     "UID=sa;"
+#     "PWD=Asd@12345;"
+#     "TrustServerCertificate=yes;"     # Keep this for self-signed certs
+#     "Encrypt=yes;"                    # Added encryption
+#     "Connection Timeout=30;"
+# )
+
+# DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
+
+
+
+# Hossein database
 params = urllib.parse.quote_plus(
     "DRIVER={ODBC Driver 17 for SQL Server};"
-    "SERVER=192.168.110.13,14330;"  # Remote server IP with port
+    "SERVER=127.0.0.1,14330;"  # Remote server IP with port
     "DATABASE=HR_DB_20;"             # 
     "UID=sa;"
     "PWD=Asd@12345;"
@@ -41,7 +57,6 @@ params = urllib.parse.quote_plus(
 )
 
 DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
-
 
 
 

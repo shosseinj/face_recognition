@@ -3,7 +3,7 @@ import numpy as np
 import av
 from ultralytics import YOLO
 from pathlib import Path
-from ByteTracker.byte_tracker import BYTETracker
+from Face_ai.ByteTracker.byte_tracker import BYTETracker
 
 # ==============================
 # CONFIG
