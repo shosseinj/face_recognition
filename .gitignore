@@ -10,6 +10,7 @@ weights/*.ckpt
 *.onnx
 *.mp4
 *.jpg
+Qdrant/*
 *.pt
 widerface_evaluation
 *.pkl

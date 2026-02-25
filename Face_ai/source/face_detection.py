@@ -1,13 +1,15 @@
 from .retina_face import RetinaFace
 import numpy as np
 import cv2
+import os
+from datetime import datetime
 
 INPUT_SIZE = 640  # RetinaFace expected input
 CONF_THRESHOLD = 0.5
 
 detector = RetinaFace()
 
-
+save_face = False
 
 
 def faceDetection(frame, trt_manager):
@@ -42,4 +44,26 @@ def faceDetection(frame, trt_manager):
 
     landmarks[:, :, 0] *= scale_x
     landmarks[:, :, 1] *= scale_y
+    
+    if save_face:
+        SAVE_DIR = "saved_faces"
+        os.makedirs(SAVE_DIR, exist_ok=True)
+
+        for face_box, landmark in zip(bboxes, landmarks):
+            x1_f, y1_f, x2_f, y2_f = map(int, face_box[:4])
+            face = frame[y1_f:y2_f, x1_f:x2_f]
+
+            if face.size == 0:
+                continue
+
+            # Unique filename using timestamp
+            filename = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".jpg"
+            
+
+            filepath = os.path.join(SAVE_DIR, filename)
+
+            cv2.imwrite(filepath, face)
+
+
+
     return  bboxes , landmarks
