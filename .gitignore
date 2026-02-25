@@ -21,6 +21,7 @@ __pycache__/
 *$py.class
 *.jpeg
 */qdrant_storage/*
+
 # C extensions
 *.so
 *.meta
@@ -57,7 +58,7 @@ Qdrant
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
-
+saved_media/
 # Unit test / coverage reports
 htmlcov/
 .tox/

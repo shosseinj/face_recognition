@@ -7,7 +7,7 @@ router = APIRouter(prefix="/personnel", tags=["personnel"])
 from ..models.database import PersonnelImage
 from pathlib import Path
 from qdrant_client.http import models
-# from Detection.TensorRT.infer import client
+from Face_ai.main import client
 
     
 @router.post("/", response_model=PersonnelSchema, status_code=status.HTTP_201_CREATED)
@@ -85,58 +85,6 @@ def delete_personnel(personnel_id: int, db: Session = Depends(get_db)):
     db.commit()
     return None
 
-#sdfsdfsdf
-@router.delete("/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_personnel_image(
-    image_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    Delete a specific personnel image
-    - Removes database record
-    - Deletes physical file from disk
-    - Removes from vector database using ref_img_id
-    """
-
-    # Find the image
-    image = db.query(PersonnelImage).filter(PersonnelImage.id == image_id).first()
-    if not image:
-        raise HTTPException(status_code=404, detail="Image not found")
-    
-    # Get information before deletion
-    file_path = Path(image.image_url)
-    
-    print(f"\n🗑️ Deleting image ID: {image_id}")
-    
-    # STEP 1: Delete from vector database
-    delete_faces_from_vector_database(image_id)
-    
-    # STEP 2: Delete from database
-    try:
-        db.delete(image)
-        db.commit()
-        print(f"✅ Deleted image record from database")
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Database deletion failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete image record: {str(e)}")
-    
-    # STEP 3: Delete physical file
-    try:
-        if file_path.exists():
-            file_path.unlink()
-            print(f"✅ Deleted image file: {file_path}")
-        
-        # Clean up empty folder
-        parent_folder = file_path.parent
-        if parent_folder.exists() and not any(parent_folder.iterdir()):
-            parent_folder.rmdir()
-            print(f"✅ Deleted empty folder: {parent_folder}")
-            
-    except Exception as e:
-        print(f"⚠️ Warning: Could not delete file/folder: {e}")
-    
-    return None
 
 
 
@@ -144,8 +92,7 @@ async def delete_personnel_image(
 
 
 
-
-def delete_faces_from_vector_database(ref_img_id: int, collection_name: str = "n5") -> bool:
+def delete_faces_from_vector_database(ref_img_id: int, collection_name: str = "n12") -> bool:
 
     try:
         filter_condition = models.Filter(

@@ -46,6 +46,7 @@ from pathlib import Path
 # from Face_ai.main import vectorDatabase
 import cv2
 import numpy as np
+from Face_ai.main import client
 
 
 
@@ -875,10 +876,9 @@ async def delete_personnel(
         
         try:
             from qdrant_client.http import models
-            # from Detection.TensorRT.infer import client
             
             print(f"   Qdrant client: {client}")
-            print(f"   Collection: n5")
+            print(f"   Collection: n12")
             
             # First, check how many points exist for this national code
             count_filter = models.Filter(
@@ -891,7 +891,7 @@ async def delete_personnel(
             )
             
             count_result = client.count(
-                collection_name="n5",
+                collection_name="n12",
                 count_filter=count_filter
             )
             print(f"   Found {count_result.count} points in vector DB for national code: {national_code}")
@@ -899,7 +899,7 @@ async def delete_personnel(
             if count_result.count > 0:
                 # Delete the points
                 delete_result = client.delete(
-                    collection_name="n5",
+                    collection_name="n12",
                     points_selector=models.FilterSelector(
                         filter=count_filter
                     )
@@ -922,13 +922,13 @@ async def delete_personnel(
                     )
                     
                     img_count = client.count(
-                        collection_name="n5",
+                        collection_name="n12",
                         count_filter=img_filter
                     )
                     
                     if img_count.count > 0:
                         img_delete = client.delete(
-                            collection_name="n5",
+                            collection_name="n12",
                             points_selector=models.FilterSelector(filter=img_filter)
                         )
                         print(f"   Deleted {img_count.count} points for ref_img_id: {image_id}")
@@ -1071,6 +1071,59 @@ async def get_all_images(
     return result
 
 
+
+#sdfsdfsdf
+@router.delete("/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_personnel_image(
+    image_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a specific personnel image
+    - Removes database record
+    - Deletes physical file from disk
+    - Removes from vector database using ref_img_id
+    """
+
+    # Find the image
+    image = db.query(PersonnelImage).filter(PersonnelImage.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    # Get information before deletion
+    file_path = Path(image.image_url)
+    
+    print(f"\n🗑️ Deleting image ID: {image_id}")
+    
+    # STEP 1: Delete from vector database
+    delete_faces_from_vector_database(image_id)
+    
+    # STEP 2: Delete from database
+    try:
+        db.delete(image)
+        db.commit()
+        print(f"✅ Deleted image record from database")
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Database deletion failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete image record: {str(e)}")
+    
+    # STEP 3: Delete physical file
+    try:
+        if file_path.exists():
+            file_path.unlink()
+            print(f"✅ Deleted image file: {file_path}")
+        
+        # Clean up empty folder
+        parent_folder = file_path.parent
+        if parent_folder.exists() and not any(parent_folder.iterdir()):
+            parent_folder.rmdir()
+            print(f"✅ Deleted empty folder: {parent_folder}")
+            
+    except Exception as e:
+        print(f"⚠️ Warning: Could not delete file/folder: {e}")
+    
+    return None
 
 
 
