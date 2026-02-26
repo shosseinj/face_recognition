@@ -12,6 +12,10 @@ from .models.schemas import (
     DetectionLogCreate, DetectionLogResponse, 
     PersonnelImageCreate, PersonnelImageResponse, PersonnelWithImages
 )
+from io import BytesIO
+import zipfile
+import tempfile
+
 import uuid  # Add this import
 from Face_ai.main import FaceEmbedding
 from .routers import personnel
@@ -628,6 +632,219 @@ async def delete_personnel_image(
         print(f"⚠️ Warning: Could not delete file/folder: {e}")
     
     return None
+
+
+
+ 
+@router.post("/upload-personnel-zip")
+async def upload_personnel_zip(
+    file: UploadFile = File(...),
+    skip_invalid_national_codes: bool = False,
+    db: Session = Depends(get_db)  # Add database session
+):
+    # Validate file type
+    if not file.filename.endswith('.zip'):
+        raise HTTPException(status_code=400, detail="Only zip files are accepted")
+    
+    # Allowed image extensions
+    ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp'}
+    
+    try:
+        contents = await file.read()
+        print(f"📦 Zip file size: {len(contents)} bytes")
+        zip_data = BytesIO(contents)
+        
+        if not zipfile.is_zipfile(zip_data):
+            raise HTTPException(status_code=400, detail="Invalid zip file")
+            
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read zip file: {str(e)}")
+    
+    processed_count = 0
+    error_count = 0
+    results = []
+    skipped_folders = []
+    all_saved_images = []  # Track all saved images for response
+    
+    with zipfile.ZipFile(zip_data, 'r') as zip_ref:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            print(f"\n📂 Extracting to: {temp_dir}")
+            zip_ref.extractall(temp_dir)
+            temp_path = Path(temp_dir)
+            
+            for person_dir in temp_path.iterdir():
+                if not person_dir.is_dir() or person_dir.name == '__MACOSX':
+                    continue
+                
+                national_code = person_dir.name
+                print(f"\n{'='*50}")
+                print(f"👤 Processing person with national code: {national_code}")
+                
+                # Validate national code format
+                is_valid_national_code = national_code.isdigit() and len(national_code) == 10
+                
+                if not is_valid_national_code:
+                    if skip_invalid_national_codes:
+                        print(f"⚠️ Invalid national code - SKIPPING")
+                        skipped_folders.append({
+                            "folder": national_code,
+                            "reason": "Invalid national code format"
+                        })
+                        continue
+                
+                # Check if personnel exists in database, if not create it
+                personnel = db.query(Personnel).filter(Personnel.national_code == national_code).first()
+                
+                if not personnel:
+                    # Create new personnel if it doesn't exist
+                    print(f"👤 Personnel not found, creating new record")
+                    personnel = Personnel(
+                        fname=f"فرد_{national_code}",  # Placeholder name
+                        lname="",
+                        national_code=national_code,
+                        staff=False,
+                        department=None
+                    )
+                    db.add(personnel)
+                    db.flush()  # Get ID without committing
+                    print(f"✅ Created new personnel with ID: {personnel.id}")
+                else:
+                    print(f"✅ Found existing personnel with ID: {personnel.id}")
+                
+                # Create personnel images directory
+                personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(personnel.id)
+                personnel_images_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Get unique image files
+                image_files = set()
+                for ext in ALLOWED_EXTENSIONS:
+                    for pattern in [f"*{ext}", f"*{ext.upper()}"]:
+                        for img_path in person_dir.glob(pattern):
+                            if not img_path.name.startswith('._'):
+                                image_files.add(img_path)
+                
+                image_files = list(image_files)
+                print(f"  🖼️ Found {len(image_files)} unique images")
+                
+                if not image_files:
+                    results.append({
+                        "national_code": national_code,
+                        "status": "warning",
+                        "message": "No images found in folder",
+                        "valid_format": is_valid_national_code
+                    })
+                    continue
+                
+                person_processed = 0
+                person_errors = 0
+                error_details = []
+                saved_images = []
+                
+                for img_path in image_files:
+                    try:
+                        print(f"\n  📸 Processing: {img_path.name}")
+                        
+                        # Read image
+                        img = cv2.imread(str(img_path))
+                        if img is None:
+                            raise ValueError("Could not decode image")
+                        
+                        # Generate filename for saving
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        unique_id = str(uuid.uuid4())[:8]
+                        safe_filename = f"{personnel.fname}_{timestamp}_{unique_id}{img_path.suffix.lower()}"
+                        safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
+                        
+                        file_path = personnel_images_dir / safe_filename
+                        
+                        # Copy file to permanent storage
+                        shutil.copy2(str(img_path), file_path)
+                        print(f"     💾 Saved to: {file_path}")
+                        
+                        # Create database record
+                        db_image = PersonnelImage(
+                            image_url=str(file_path),
+                            personnel_id=personnel.id
+                        )
+                        db.add(db_image)
+                        db.flush()  # Get ID without committing
+                        
+                        print(f"     🆔 Database record created with ID: {db_image.id}")
+                        
+                        # Save to vector database with ref_img_id
+                        print(f"     🔄 Adding to vector database with ref_img_id: {db_image.id}")
+                        # vectorDatabase(img, national_code, save_mode=True, ref_img_id=db_image.id)
+                        
+                        FaceEmbedding(img, national_code, ref_img_id=db_image.id)
+                        saved_images.append({
+                            "id": db_image.id,
+                            "file_name": safe_filename,
+                            "file_path": str(file_path)
+                        })
+                        
+                        print(f"  ✅ Successfully processed: {img_path.name}")
+                        person_processed += 1
+                        
+                    except Exception as e:
+                        print(f"  ❌ Error processing {img_path.name}: {str(e)}")
+                        traceback.print_exc()
+                        person_errors += 1
+                        error_details.append({
+                            "file": img_path.name,
+                            "error": str(e)
+                        })
+                
+                # Commit all changes for this personnel
+                db.commit()
+                
+                processed_count += person_processed
+                error_count += person_errors
+                
+                results.append({
+                    "national_code": national_code,
+                    "personnel_id": personnel.id,
+                    "status": "success" if person_processed > 0 else "error",
+                    "valid_format": is_valid_national_code,
+                    "processed": person_processed,
+                    "errors": person_errors,
+                    "total_images": len(image_files),
+                    "saved_images": saved_images,
+                    "error_details": error_details if error_details else None
+                })
+                
+                all_saved_images.extend(saved_images)
+                print(f"\n  📊 Summary for {national_code}: {person_processed}/{len(image_files)} processed")
+    
+    print(f"\n{'='*50}")
+    print(f"📊 FINAL SUMMARY")
+    print(f"{'='*50}")
+    print(f"Total processed: {processed_count}")
+    print(f"Total errors: {error_count}")
+    print(f"Total persons: {len(results)}")
+    print(f"Total images saved: {len(all_saved_images)}")
+    
+    return {
+        "success": True,
+        "filename": file.filename,
+        "message": f"Processed {processed_count} images, {error_count} errors",
+        "summary": {
+            "total_processed": processed_count,
+            "total_errors": error_count,
+            "total_persons": len(results),
+            "total_images_saved": len(all_saved_images),
+            "skipped_folders": len(skipped_folders)
+        },
+        "details": results,
+        "skipped_folders": skipped_folders if skipped_folders else None
+    }
+
+
+    
+    
+    
+
+
+
 
 
 
