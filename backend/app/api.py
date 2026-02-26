@@ -12,6 +12,8 @@ from .models.schemas import (
     DetectionLogCreate, DetectionLogResponse, 
     PersonnelImageCreate, PersonnelImageResponse, PersonnelWithImages
 )
+import traceback
+
 from io import BytesIO
 import zipfile
 import tempfile

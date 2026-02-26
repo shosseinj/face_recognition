@@ -5,7 +5,6 @@ import uuid
 import base64
 import shutil
 import asyncio
-import traceback
 from pathlib import Path
 from datetime import datetime, date
 from typing import Optional, Set

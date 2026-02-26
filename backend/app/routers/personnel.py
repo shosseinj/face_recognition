@@ -86,18 +86,35 @@ async def get_personnel_with_images(
 
 
 @router.put("/{personnel_id}", response_model=PersonnelSchema)
-def update_personnel(personnel_id: int, personnel_update: PersonnelUpdate, db: Session = Depends(get_db)):
-    db_personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
-    if db_personnel is None:
+async def update_personnel(
+    personnel_id: int,
+    personnel_update: PersonnelUpdate,
+    db: Session = Depends(get_db)
+):
+    # Get existing personnel
+    personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    if not personnel:
         raise HTTPException(status_code=404, detail="Personnel not found")
     
-    update_data = personnel_update.dict(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(db_personnel, field, value)
+    # Check unique national code ONLY if it's being updated
+    if personnel_update.national_code and personnel_update.national_code != personnel.national_code:
+        existing = db.query(Personnel).filter(
+            Personnel.national_code == personnel_update.national_code,
+            Personnel.id != personnel_id  # Exclude current record
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=400, 
+                detail="کد ملی موجود است!"
+            )
+    
+    # Update fields
+    for field, value in personnel_update.dict(exclude_unset=True).items():
+        setattr(personnel, field, value)
     
     db.commit()
-    db.refresh(db_personnel)
-    return db_personnel
+    db.refresh(personnel)
+    return personnel
 
 @router.delete("/{personnel_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_personnel(personnel_id: int, db: Session = Depends(get_db)):
