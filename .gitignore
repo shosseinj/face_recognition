@@ -6,6 +6,10 @@ data/widerface
 eval/
 weights/*.pth
 weights/*.pt
+*.engine
+Face_ai/source/engine/*
+qdrant_images/
+*.zip
 weights/*.ckpt
 *.onnx
 *.mp4

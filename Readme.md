@@ -1,8 +1,12 @@
 ## Running Qdrant
 
 ```
- docker run -p 6333:6333 -p 6334:6334 -v "$(pwd)//Qdrant:/qdrant/storage:z" qdrant/qdrant
+docker run -p 7000:6333 -p 7001:6334 -v "$(pwd)//Qdrant:/qdrant/storage:z" qdrant/qdrant
 ```
+
+alembic revision --autogenerate -m "add area to log table"
+alembic upgrade head
+docker run --gpus all -v "${pwd}:/app" -p 8000:8000 -w /app face_recognition:v1 python3 run.py
 
 ```
 docker run --gpus all -v "${pwd}:/app" -p 8000:8000 -w /app cuda_torch_tensorrt_detection_extra1:latest uvicorn backend.app.main:app --host 0.0.0.0 --port 8000

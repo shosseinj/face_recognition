@@ -28,7 +28,7 @@ def save_video_with_ffmpeg(
     frames: list,
     output_path: str,
     fps: int = 20,
-    quality: str = "medium",
+    quality: str = "slow",#medium
     for_web: bool = True
 ) -> bool:
     """

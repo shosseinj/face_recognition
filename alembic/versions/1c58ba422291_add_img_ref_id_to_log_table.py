@@ -1,8 +1,8 @@
-"""Initial migration for DetectionLogs table
+"""add img ref id to log table
 
-Revision ID: 8e24d9d1c679
-Revises: 2323ea0e9ca7
-Create Date: 2026-02-17 09:58:22.516351
+Revision ID: 1c58ba422291
+Revises: af18c4e1d013
+Create Date: 2026-04-12 08:54:55.384950
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '8e24d9d1c679'
-down_revision: Union[str, Sequence[str], None] = '2323ea0e9ca7'
+revision: str = '1c58ba422291'
+down_revision: Union[str, Sequence[str], None] = 'af18c4e1d013'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

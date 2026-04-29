@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 import os
 from datetime import datetime
+from Face_ai.ByteTracker.byte_tracker import BYTETracker
 
 INPUT_SIZE = 640  # RetinaFace expected input
 CONF_THRESHOLD = 0.5
@@ -11,6 +12,15 @@ detector = RetinaFace()
 
 save_face = False
 
+class Args:
+    track_thresh = 0.4
+    track_buffer = 30
+    match_thresh = 0.8
+    aspect_ratio_thresh = 1.6
+    min_box_area = 10
+    mot20 = False
+
+tracker = BYTETracker(Args())
 
 def faceDetection(frame, trt_manager):
     if frame is None or frame.size == 0:
@@ -44,26 +54,32 @@ def faceDetection(frame, trt_manager):
 
     landmarks[:, :, 0] *= scale_x
     landmarks[:, :, 1] *= scale_y
-    
-    if save_face:
-        SAVE_DIR = "saved_faces"
-        os.makedirs(SAVE_DIR, exist_ok=True)
-
-        for face_box, landmark in zip(bboxes, landmarks):
-            x1_f, y1_f, x2_f, y2_f = map(int, face_box[:4])
-            face = frame[y1_f:y2_f, x1_f:x2_f]
-
-            if face.size == 0:
-                continue
-
-            # Unique filename using timestamp
-            filename = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".jpg"
-            
-
-            filepath = os.path.join(SAVE_DIR, filename)
-
-            cv2.imwrite(filepath, face)
 
 
+    if len(bboxes) > 0:
+        bboxes_np = np.array(bboxes, dtype=np.float32)
+    else:
+        bboxes_np = np.empty((0, 5), dtype=np.float32)
 
-    return  bboxes , landmarks
+
+    online_targets = tracker.update(
+        bboxes_np,
+        frame.shape[:2],
+        frame.shape[:2]
+    )
+    tracked_bbox=[]
+    for t in online_targets:
+
+
+        score = float(t.score)
+
+        x1 = t.tlwh[0]
+        y1 = t.tlwh[1]
+        x2 = t.tlwh[0] + t.tlwh[2]
+        y2 = t.tlwh[1] + t.tlwh[3] 
+        id = t.track_id
+        tracked_bbox.append([x1, y1, x2, y2, score, id])
+
+
+    return  tracked_bbox , landmarks
+    # return  bboxes , landmarks
