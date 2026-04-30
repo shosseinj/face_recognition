@@ -1,5 +1,5 @@
 import urllib
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Index, Boolean, ForeignKey, NVARCHAR, Unicode
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Index, Boolean, ForeignKey, NVARCHAR, Unicode, Table
 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
@@ -85,6 +85,18 @@ engine = create_engine(
 Base = declarative_base()
 
 
+# ==================== ASSOCIATION TABLE (Many-to-Many) ====================
+# This table links Personnel and Rooms
+personnel_room_association = Table(
+    'personnel_room_association',
+    Base.metadata,
+    Column('personnel_id', Integer, ForeignKey('Personnel.id'), primary_key=True),
+    Column('room_id', Integer, ForeignKey('Rooms.id'), primary_key=True),
+    Column('assigned_at', DateTime, default=datetime.now),
+    Column('assigned_by', String(100), nullable=True)  # Who granted access
+)
+
+
 class Personnel(Base):
     __tablename__ = "Personnel"
     
@@ -102,6 +114,46 @@ class Personnel(Base):
         back_populates="personnel",
         cascade="all, delete-orphan"  # This enables cascade delete
     )
+    rooms = relationship("Room", secondary=personnel_room_association, back_populates="personnel")
+
+class Room(Base):
+    __tablename__ = "Rooms"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    room_number = Column(String(50), nullable=False, unique=True, index=True)  # e.g., "101", "A-202"
+    room_name = Column(NVARCHAR(200), nullable=True)  # e.g., "Conference Room", "Office A"
+    room_type = Column(NVARCHAR(100), nullable=True)  # e.g., "office", "conference", "lab"
+    capacity = Column(Integer, nullable=True)
+    is_active = Column(Boolean, default=True)
+    description = Column(NVARCHAR(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    # Relationships
+    personnel = relationship("Personnel", secondary=personnel_room_association, back_populates="rooms")
+    # access_logs = relationship("RoomAccessLog", back_populates="room", cascade="all, delete-orphan")
+
+
+# class RoomAccessLog(Base):
+#     __tablename__ = "RoomAccessLogs"
+    
+#     id = Column(Integer, primary_key=True, autoincrement=True)
+#     personnel_id = Column(Integer, ForeignKey('Personnel.id'), nullable=False)
+#     room_id = Column(Integer, ForeignKey('Rooms.id'), nullable=False)
+    
+#     access_time = Column(DateTime, default=datetime.now, index=True)
+#     access_granted = Column(Boolean, nullable=False)
+#     denial_reason = Column(String(50), nullable=True)  # "no_access" or "low_confidence"
+#     face_confidence = Column(Float, nullable=True)  # For audit trail
+    
+#     # Relationships
+#     personnel = relationship("Personnel")
+#     room = relationship("Room")
+
+
+# Session factory
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 class DetectionLog(Base):
     __tablename__ = "DetectionLogs"
@@ -117,8 +169,13 @@ class DetectionLog(Base):
     camera_id = Column(Integer, nullable=True)
     # created_at = Column(DateTime, server_default=func.now())
     created_at = Column(DateTime, default=datetime.now)
-    
+    room_id = Column(Integer, ForeignKey('Rooms.id'), nullable=True)
+    access_granted = Column(Boolean, nullable=True)  # ADD THIS FIELD
 
+    
+    room = relationship("Room")
+
+<<<<<<< Updated upstream
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -401,6 +458,8 @@ def get_detection_by_id(log_id: int, db: Session = None):
     finally:
         if close_db:
             db.close()
+=======
+>>>>>>> Stashed changes
             
 
 class PersonnelImage(Base):
@@ -410,126 +469,7 @@ class PersonnelImage(Base):
     image_url = Column(Unicode(500), nullable=False)  # Changed to Unicode for paths that might have Persian chars
     personnel_id = Column(Integer, ForeignKey('Personnel.id'), nullable=False)
     # uploaded_at = Column(DateTime, server_default=func.now())
+    is_primary = Column(Boolean, default=False)
     uploaded_at = Column(DateTime, default=datetime.now)
     
     personnel = relationship("Personnel", back_populates="images")
-
-def add_personnel_image(personnel_id: int, image_url: str, description: str = None, is_primary: bool = False, db: Session = None):
-    """
-    Add an image to a personnel record
-    Returns the created PersonnelImage object or None if failed
-    """
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    
-    try:
-        # Check if personnel exists
-        personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
-        if not personnel:
-            print(f"❌ Personnel with ID {personnel_id} not found")
-            return None
-        
-        # If this is set as primary, unset any existing primary images
-        if is_primary:
-            db.query(PersonnelImage).filter(
-                PersonnelImage.personnel_id == personnel_id,
-                PersonnelImage.is_primary == True
-            ).update({PersonnelImage.is_primary: False})
-        
-        # Create new image record
-        personnel_image = PersonnelImage(
-            image_url=image_url,
-            personnel_id=personnel_id,
-            description=description,
-            is_primary=is_primary
-        )
-        
-        db.add(personnel_image)
-        db.commit()
-        db.refresh(personnel_image)
-        
-        print(f"✅ Added image for personnel ID {personnel_id}: {image_url}")
-        return personnel_image
-        
-    except Exception as e:
-        print(f"❌ Error adding personnel image: {e}")
-        db.rollback()
-        return None
-    finally:
-        if close_db:
-            db.close()
-
-def get_personnel_images(personnel_id: int, db: Session = None):
-    """Get all images for a specific personnel"""
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    
-    try:
-        images = db.query(PersonnelImage).filter(
-            PersonnelImage.personnel_id == personnel_id
-        ).order_by(
-            PersonnelImage.is_primary.desc(),
-            PersonnelImage.uploaded_at.desc()
-        ).all()
-        
-        return images
-    finally:
-        if close_db:
-            db.close()
-
-def delete_personnel_image(image_id: int, db: Session = None):
-    """Delete a personnel image"""
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-    
-    try:
-        image = db.query(PersonnelImage).filter(PersonnelImage.id == image_id).first()
-        if image:
-            db.delete(image)
-            db.commit()
-            print(f"✅ Deleted personnel image ID {image_id}")
-            return True
-        else:
-            print(f"❌ Personnel image ID {image_id} not found")
-            return False
-    except Exception as e:
-        print(f"❌ Error deleting personnel image: {e}")
-        db.rollback()
-        return False
-    finally:
-        if close_db:
-            db.close()
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         
-         

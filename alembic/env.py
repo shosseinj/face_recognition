@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from backend.app.models.database import engine, Base
 
 # IMPORT YOUR MODELS TO REGISTER THEM WITH Base.metadata
-from backend.app.models.database import Personnel, DetectionLog, PersonnelImage
+from backend.app.models.database import Personnel, DetectionLog, PersonnelImage, Room
 
 # this is the Alembic Config object, which provides access to the .ini file
 config = context.config

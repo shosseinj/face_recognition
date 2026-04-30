@@ -27,7 +27,8 @@ import cv2
 import numpy as np
 import os
 from typing import List, Optional  # If needed
-from .models.database import DetectionLog, get_db, Personnel, PersonnelImage, FACE_STORAGE_DIR
+from .models.database import DetectionLog, Personnel, PersonnelImage, FACE_STORAGE_DIR
+from .models.db_functions import get_db
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from io import BytesIO
@@ -42,7 +43,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from .models.database import save_detection_with_face, get_db, DetectionLog, Personnel
+from .models.db_functions import save_detection_with_face, get_db
+from .models.database import DetectionLog, Personnel
 from .api import router as api_router
 # from Detection.TensorRT.infer import ws_transfer, vectorDatabase, removeDatabase
 from io import BytesIO  # IMPORT THIS!
@@ -310,17 +312,14 @@ async def send_hossein():
                     img = cv2.hconcat([img,ref_img])
 
 
-                
+                _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                face_image_base64 = base64.b64encode(buffer).decode('utf-8')
             except Exception as e:
 
                 print('log.face_image_path', log.face_image_path)
-                
+
                 print(f'error in pass ={e}')
                 pass
-
-            _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            face_image_base64 = base64.b64encode(buffer).decode('utf-8')
-            
             # else:
             #     face_image_base64 = None
             #     print('\n\n\n\n face_image_base64 = None')
@@ -440,11 +439,15 @@ async def video_broadcaster():
     print("🎬 Starting video broadcaster...")
     
     # Try camera first, fallback to RTSP
-    # cap = cv2.VideoCapture('./video6.mp4') 
+    cap = cv2.VideoCapture('./video6.mp4') 
     # cap = cv2.VideoCapture('http://192.168.50.19:8080/video') 
     # cap = cv2.VideoCapture(0) 
 
+<<<<<<< Updated upstream
     # use_camera = cap.isOpened() and False
+=======
+    use_camera = cap.isOpened()# or True
+>>>>>>> Stashed changes
 
     # if not use_camera:
     #     cap.release()
@@ -453,7 +456,6 @@ async def video_broadcaster():
 
     with open('./polygon_points.json', 'r') as f:
         loaded_polygon_points = json.load(f)
-        # loaded_polygon_points=[]
    
     try_objs = {}
     sources = [
@@ -466,7 +468,7 @@ async def video_broadcaster():
 
 
     while True:
-        # cap = cv2.VideoCapture('./video6.mp4') 
+        cap = cv2.VideoCapture('./video6.mp4') 
         try:
    
             
@@ -528,44 +530,46 @@ async def video_broadcaster():
 
                             if history["names"]:
                                 history = track_history[obj]
-                                name_counts = Counter(history["names"])
-                                final_name, count = name_counts.most_common(1)[0]
 
-                                valid_indices = [i for i, n in enumerate(history["names"]) if n == final_name]
+                                if history["names"]:
+                                    name_counts = Counter(history["names"])
+                                    final_name, count = name_counts.most_common(1)[0]
 
-                                if valid_indices:
-                                    best_idx = max(valid_indices, key=lambda i: history["scores"][i])
-                                    final_score = history["scores"][best_idx]
-                                    final_face = history["faces"][best_idx]
-                                    final_ref_img_id = history["ref_img_ids"][best_idx]
+                                    valid_indices = [i for i, n in enumerate(history["names"]) if n == final_name]
 
-                                    start_idx = max(0, best_idx - half_clip)
-                                    end_idx = min(len(history["frames"]), best_idx + half_clip)
-                                    frames_to_save = list(history["frames"])[start_idx:end_idx]
+                                    if valid_indices:
+                                        best_idx = max(valid_indices, key=lambda i: history["scores"][i])
+                                        final_score = history["scores"][best_idx]
+                                        final_face = history["faces"][best_idx]
+                                        final_ref_img_id = history["ref_img_ids"][best_idx]
 
-                                    valid_entries = [
-                                                        (i, name, score, face, ref_id, area, frame) 
-                                                        for i, (name, score, face, ref_id, area, frame) in enumerate(zip(
-                                                            history["names"], history["scores"], history["faces"], 
-                                                            history["ref_img_ids"], history["areas"], history["frames"]
-                                                        )) 
-                                                            if area != 'OUT' 
-                                                        ]
-                                    unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
-                                    for area in unique_areas:
-                                        log_id = save_detection_with_face(
-                                            person=final_name,
-                                            confidence=float(final_score),
-                                            face_image=final_face,
-                                            ref_img_id=final_ref_img_id,
-                                            frames_to_save=frames_to_save, 
-                                            face_to_save=history['faces'],
-                                            area= area,
-                                            save_video= True
-                                        )
-                                        if log_id is not None:
-                                            asyncio.create_task(send_hossein())
-                        
+                                        start_idx = max(0, best_idx - half_clip)
+                                        end_idx = min(len(history["frames"]), best_idx + half_clip)
+                                        frames_to_save = list(history["frames"])[start_idx:end_idx]
+
+                                        valid_entries = [
+                                                            (i, name, score, face, ref_id, area, frame) 
+                                                            for i, (name, score, face, ref_id, area, frame) in enumerate(zip(
+                                                                history["names"], history["scores"], history["faces"], 
+                                                                history["ref_img_ids"], history["areas"], history["frames"]
+                                                            )) 
+                                                                if area != 'OUT'
+                                                            ]
+                                        unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
+                                        for area in unique_areas:
+                                            log_id = save_detection_with_face(
+                                                person=final_name,
+                                                confidence=float(final_score),
+                                                face_image=final_face,
+                                                ref_img_id=final_ref_img_id,
+                                                frames_to_save=frames_to_save, 
+                                                face_to_save=history['faces'],
+                                                area= area,
+                                                save_video= False
+                                            )
+                                            if log_id is not None:
+                                                asyncio.create_task(send_hossein())
+                            
                             del track_history[obj]
                             del try_objs[obj]
                         
@@ -756,16 +760,60 @@ async def shutdown_event():
             pass
     print("Video broadcaster stopped")
 
-
-
-
-
-
 # Define Pydantic model for request body
-class SaveRequest(BaseModel):
-    id: int
-    name_front: str
+# class SaveRequest(BaseModel):
+#     id: int
+#     name_front: str
 
+# @app.post("/ws-save")
+# async def save_detection(
+#     request: SaveRequest,
+#     db: Session = Depends(get_db)
+# ):
+#     """Save a detection to the vector database"""
+#     print(f'Processing save request for ID: {request.id}, name: {request.name_front}')
+    
+#     try:
+#         # Get detection log
+#         detection_log = db.query(DetectionLog).filter(DetectionLog.id == request.id).first()
+        
+#         if not detection_log:
+#             raise HTTPException(status_code=404, detail=f"Detection log with ID {request.id} not found")
+        
+#         if not detection_log.face_image_path:
+#             raise HTTPException(status_code=400, detail="No face image path found in this log entry")
+        
+#         if not os.path.exists(detection_log.face_image_path):
+#             raise HTTPException(status_code=404, detail=f"Face image file not found at: {detection_log.face_image_path}")
+        
+#         # Read and process image
+#         img = cv2.imread(detection_log.face_image_path)
+#         if img is None:
+#             raise HTTPException(status_code=500, detail=f"Failed to read image file from: {detection_log.face_image_path}")
+        
+#         # Add to vector database
+#         result = vectorDatabase(img, request.name_front)
+        
+#         # Update the person name
+#         detection_log.person = request.name_front
+#         db.commit()
+        
+#         return {
+#             "success": True,
+#             "message": f"Image added to vector database for {request.name_front}",
+#             "log_id": request.id,
+#             "corrected_person": request.name_front,
+#             "image_shape": img.shape,
+#             "detection_time": detection_log.detection_time.isoformat() if detection_log.detection_time else None
+#         }
+            
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         print(f"Error processing log ID {request.id}: {e}")
+#         import traceback
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=str(e))
     
 
 @app.exception_handler(Exception)
@@ -779,205 +827,96 @@ async def global_exception_handler(request, exc):
 
 
 
-@app.post("/upload-personnel-zip")
-async def upload_personnel_zip(
-    file: UploadFile = File(...),
-    skip_invalid_national_codes: bool = False,
-    db: Session = Depends(get_db)  # Add database session
-):
-    # Validate file type
-    if not file.filename.endswith('.zip'):
-        raise HTTPException(status_code=400, detail="Only zip files are accepted")
-    
-    # Allowed image extensions
-    ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp'}
-    
-    try:
-        contents = await file.read()
-        print(f"📦 Zip file size: {len(contents)} bytes")
-        zip_data = BytesIO(contents)
-        
-        if not zipfile.is_zipfile(zip_data):
-            raise HTTPException(status_code=400, detail="Invalid zip file")
-            
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not read zip file: {str(e)}")
-    
-    processed_count = 0
-    error_count = 0
-    results = []
-    skipped_folders = []
-    all_saved_images = []  # Track all saved images for response
-    
-    with zipfile.ZipFile(zip_data, 'r') as zip_ref:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"\n📂 Extracting to: {temp_dir}")
-            zip_ref.extractall(temp_dir)
-            temp_path = Path(temp_dir)
-            
-            for person_dir in temp_path.iterdir():
-                if not person_dir.is_dir() or person_dir.name == '__MACOSX':
-                    continue
-                
-                national_code = person_dir.name
-                print(f"\n{'='*50}")
-                print(f"👤 Processing person with national code: {national_code}")
-                
-                # Validate national code format
-                is_valid_national_code = national_code.isdigit() and len(national_code) == 10
-                
-                if not is_valid_national_code:
-                    if skip_invalid_national_codes:
-                        print(f"⚠️ Invalid national code - SKIPPING")
-                        skipped_folders.append({
-                            "folder": national_code,
-                            "reason": "Invalid national code format"
-                        })
-                        continue
-                
-                # Check if personnel exists in database, if not create it
-                personnel = db.query(Personnel).filter(Personnel.national_code == national_code).first()
-                
-                if not personnel:
-                    # Create new personnel if it doesn't exist
-                    print(f"👤 Personnel not found, creating new record")
-                    personnel = Personnel(
-                        fname=f"فرد_{national_code}",  # Placeholder name
-                        lname="",
-                        national_code=national_code,
-                        staff=False,
-                        department=None
-                    )
-                    db.add(personnel)
-                    db.flush()  # Get ID without committing
-                    print(f"✅ Created new personnel with ID: {personnel.id}")
-                else:
-                    print(f"✅ Found existing personnel with ID: {personnel.id}")
-                
-                # Create personnel images directory
-                personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(personnel.id)
-                personnel_images_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Get unique image files
-                image_files = set()
-                for ext in ALLOWED_EXTENSIONS:
-                    for pattern in [f"*{ext}", f"*{ext.upper()}"]:
-                        for img_path in person_dir.glob(pattern):
-                            if not img_path.name.startswith('._'):
-                                image_files.add(img_path)
-                
-                image_files = list(image_files)
-                print(f"  🖼️ Found {len(image_files)} unique images")
-                
-                if not image_files:
-                    results.append({
-                        "national_code": national_code,
-                        "status": "warning",
-                        "message": "No images found in folder",
-                        "valid_format": is_valid_national_code
-                    })
-                    continue
-                
-                person_processed = 0
-                person_errors = 0
-                error_details = []
-                saved_images = []
-                
-                for img_path in image_files:
-                    try:
-                        print(f"\n  📸 Processing: {img_path.name}")
-                        
-                        # Read image
-                        img = cv2.imread(str(img_path))
-                        if img is None:
-                            raise ValueError("Could not decode image")
-                        
-                        # Generate filename for saving
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        unique_id = str(uuid.uuid4())[:8]
-                        safe_filename = f"{personnel.fname}_{timestamp}_{unique_id}{img_path.suffix.lower()}"
-                        safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
-                        
-                        file_path = personnel_images_dir / safe_filename
-                        
-                        # Copy file to permanent storage
-                        
-                        # Create database record
-                        db_image = PersonnelImage(
-                            image_url=str(file_path),
-                            personnel_id=personnel.id
-                        )
-                        db.add(db_image)
-                        db.flush()  # Get ID without committing
-                        
-                        print(f"     🆔 Database record created with ID: {db_image.id}")
-                        
-                        # Save to vector database with ref_img_id
-                        print(f"     🔄 Adding to vector database with ref_img_id: {db_image.id}")
-                        cropped_img = FaceEmbeddingCropping(img, national_code,  ref_img_id=db_image.id)
-                        cv2.imwrite(str(file_path), cropped_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+ 
 
-                      
-                        saved_images.append({
-                            "id": db_image.id,
-                            "file_name": safe_filename,
-                            "file_path": str(file_path)
-                        })
-                        
-                        print(f"  ✅ Successfully processed: {img_path.name}")
-                        person_processed += 1
-                        
-                    except Exception as e:
-                        print(f"  ❌ Error processing {img_path.name}: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
-                        person_errors += 1
-                        error_details.append({
-                            "file": img_path.name,
-                            "error": str(e)
-                        })
-                
-                # Commit all changes for this personnel
-                db.commit()
-                
-                processed_count += person_processed
-                error_count += person_errors
-                
-                results.append({
-                    "national_code": national_code,
-                    "personnel_id": personnel.id,
-                    "status": "success" if person_processed > 0 else "error",
-                    "valid_format": is_valid_national_code,
-                    "processed": person_processed,
-                    "errors": person_errors,
-                    "total_images": len(image_files),
-                    "saved_images": saved_images,
-                    "error_details": error_details if error_details else None
-                })
-                
-                all_saved_images.extend(saved_images)
-                print(f"\n  📊 Summary for {national_code}: {person_processed}/{len(image_files)} processed")
+
+# @app.get("/qd-remove")
+# async def qd_remove(
+#     # request: SaveRequest,
+#     # db: Session = Depends(get_db)
+# ):
+#     # print('id', request.id)
+#     # # name_to_ai = dictionary.get(request.name_front)
+#     # name_to_ai = request.name_front
+#     try:
+#         name_to_ai = ['0311344119']
+#         result = removeDatabase(name_to_ai)
+   
+#         return {
+#             "success": True,
+#             "message": f"Image added to vector database for {name_to_ai}",
+#             # "log_id": request.id,
+#             "corrected_person": name_to_ai,
+#             "vector_database_result": result if result else "Success",
+#         }
+            
+#     except Exception as e:
+#         # print(f"Error processing log ID {request.id}: {e}")
+#         import traceback
+#         traceback.print_exc()
+#         return {"error": str(e)}
+#     finally:
+#         print('Processing complete')
     
-    print(f"\n{'='*50}")
-    print(f"📊 FINAL SUMMARY")
-    print(f"{'='*50}")
-    print(f"Total processed: {processed_count}")
-    print(f"Total errors: {error_count}")
-    print(f"Total persons: {len(results)}")
-    print(f"Total images saved: {len(all_saved_images)}")
     
-    return {
-        "success": True,
-        "filename": file.filename,
-        "message": f"Processed {processed_count} images, {error_count} errors",
-        "summary": {
-            "total_processed": processed_count,
-            "total_errors": error_count,
-            "total_persons": len(results),
-            "total_images_saved": len(all_saved_images),
-            "skipped_folders": len(skipped_folders)
-        },
-        "details": results,
-        "skipped_folders": skipped_folders if skipped_folders else None
-    }
+    
+    
+
+
+
+# Extracted_frame_path = Path("saved_media")
+# @app.post("/extract-video-frames")
+# async def extract_video_frames(file: UploadFile = File(...)):
+    
+#     # Validate file type
+#     if not file.filename.endswith(".mp4"):
+#         raise HTTPException(status_code=400, detail="Only mp4 files are accepted")
+
+#     try:
+#         contents = await file.read()
+#         print(f"📦 File size: {len(contents)} bytes")
+
+#         # Save to a temporary file (OpenCV needs a file path)
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+#             tmp.write(contents)
+#             tmp_path = tmp.name
+
+#         cap = cv2.VideoCapture(tmp_path)
+
+#         if not cap.isOpened():
+#             raise HTTPException(status_code=400, detail="Could not open video")
+
+#         frame_count = 0
+#         saved_frames = []
+
+#         daily_dir = Extracted_frame_path / Path(file.filename).stem
+#         while True:
+#             ret, frame = cap.read()
+#             if not ret:
+#                 break
+
+#             # Example: save every 30th frame
+#             if frame_count % 1 == 0:
+#                 daily_dir.mkdir(exist_ok=True, parents=True)
+#                 frame_name = f"frame_{frame_count}.jpg"
+#                 frame_name = str(Extracted_frame_path / Path(file.filename).stem ) +'/'+ frame_name
+#                 cv2.imwrite(frame_name, frame)
+#                 saved_frames.append(frame_name)
+
+#             frame_count += 1
+
+#         cap.release()
+#         os.remove(tmp_path)
+
+#         return {
+#             "total_frames_processed": frame_count,
+#             "frames_saved": len(saved_frames),
+#             "frame_files": saved_frames
+#         }
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+    
+
+
 

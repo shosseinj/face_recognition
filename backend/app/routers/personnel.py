@@ -9,7 +9,9 @@ from fastapi import (
     File,
     Response
 )
+import cv2
 import shutil  # Add this line at the top with other imports
+from sqlalchemy.orm import joinedload
 
 from ..validators import normalize_national_code, validate_iran_national_code
 from fastapi import APIRouter, Depends, Request, Query, HTTPException, UploadFile, File, Form
@@ -17,12 +19,20 @@ import uuid  # Add this import
 import os
 from sqlalchemy.orm import Session
 from typing import List
-from ..models.database import Personnel, get_db
-from ..models.schemas import Personnel as PersonnelSchema, PersonnelWithImages, PersonnelCreate, PersonnelUpdate, PersonnelImageResponse, PersonnelImageResponse
+# from ..schemas import Personnel 
+from ..models.db_functions import (
+    get_db,
+    get_personnel_rooms,
+    get_personnel_images,
+    add_personnel_image,
+    delete_personnel_image
+)
+from sqlalchemy import text
+
+from ..models.schemas import Personnel as PersonnelSchema, PersonnelWithImages, PersonnelCreate, PersonnelUpdate, PersonnelImageResponse, PersonnelImageResponse, RoomResponse
 router = APIRouter(prefix="/personnel", tags=["personnel"])
-from ..models.database import PersonnelImage
+from ..models.database import PersonnelImage, Room as RoomDB
 from pathlib import Path
-from Face_ai.main import DeletePointVD
 import tempfile
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from io import BytesIO
@@ -33,21 +43,15 @@ from datetime import datetime
 from typing import Optional
 # from .detections import get_face_image_url, get_video_url
 from ..utils import get_face_image_url, get_video_url
-from Face_ai.main import FaceEmbedding, DeletePointVD, FaceEmbeddingWithoutDetection, FaceCropping
+from Face_ai.main import FaceEmbedding, DeletePointVD, FaceEmbeddingWithoutDetection, FaceCropping, FaceEmbeddingCropping
 from ..models.schemas import (
     DetectionLogCreate, DetectionLogResponse, 
     PersonnelImageCreate, PersonnelImageResponse, PersonnelWithImages, PersonnelFromLogsRequest
 )
-from ..models.database import DetectionLog, get_db, Personnel, PersonnelImage, FACE_STORAGE_DIR
-import cv2
+from ..models.database import DetectionLog, Personnel as PersonnelDB, PersonnelImage, FACE_STORAGE_DIR
+from ..models.db_functions import get_db
 import numpy as np
 import zipfile
-
-
-
-
-
-
 
 
 
@@ -367,27 +371,96 @@ async def import_personnel_excel(
 @router.post("/", response_model=PersonnelSchema, status_code=status.HTTP_201_CREATED)
 def create_personnel(personnel: PersonnelCreate, db: Session = Depends(get_db)):
     # Check if national code already exists
-    existing = db.query(Personnel).filter(Personnel.national_code == personnel.national_code).first()
+    existing = db.query(PersonnelDB).filter(PersonnelDB.national_code == personnel.national_code).first()
     if existing:
         raise HTTPException(status_code=400, detail="کد ملی موجود است!")
     
-    db_personnel = Personnel(**personnel.dict())
+    # Create new personnel (rooms will be added separately if needed)
+    db_personnel = PersonnelDB(
+        fname=personnel.fname,
+        lname=personnel.lname,
+        national_code=personnel.national_code,
+        staff=personnel.staff,
+        department=personnel.department
+    )
+    
     db.add(db_personnel)
     db.commit()
     db.refresh(db_personnel)
     return db_personnel
 
+    
 @router.get("/", response_model=List[PersonnelSchema])
-def read_personnel(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    personnel = db.query(Personnel).order_by(Personnel.id).offset(skip).limit(limit).all()
+def read_personnel(
+    skip: int = 0, 
+    limit: int = 100,
+    include_rooms: bool = Query(True),
+    db: Session = Depends(get_db)
+):
+    """Get all personnel with their rooms"""
+    query = db.query(PersonnelDB)
+    
+    if include_rooms:
+        query = query.options(joinedload(PersonnelDB.rooms))
+    
+    personnel = query.order_by(PersonnelDB.id).offset(skip).limit(limit).all()
     return personnel
 
+
+
+@router.get("/summary")  # Make sure this comes BEFORE /{personnel_id}
+def get_logs_summary(
+    from_date: Optional[datetime] = Query(None),
+    to_date: Optional[datetime] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Get overall summary for all detection logs"""
+    from sqlalchemy import func
+    
+    query = db.query(DetectionLog)  # ✅ This is fine, no text() needed
+    
+    if from_date:
+        query = query.filter(DetectionLog.detection_time >= from_date)
+    if to_date:
+        query = query.filter(DetectionLog.detection_time <= to_date)
+    
+    stats = query.with_entities(
+        func.count(DetectionLog.id).label('total'),
+        func.avg(DetectionLog.confidence).label('avg_conf'),
+        func.min(DetectionLog.detection_time).label('first'),
+        func.max(DetectionLog.detection_time).label('last')
+    ).first()
+    
+    unique_personnel = query.with_entities(DetectionLog.person).distinct().count()
+    
+    return {
+        "total_detections": stats.total or 0,
+        "unique_personnel": unique_personnel,
+        "average_confidence": round(stats.avg_conf, 2) if stats.avg_conf else 0,
+        "first_detection": stats.first.isoformat() if stats.first else None,
+        "last_detection": stats.last.isoformat() if stats.last else None
+    }
+
+
 @router.get("/{personnel_id}", response_model=PersonnelSchema)
-def read_personnel(personnel_id: int, db: Session = Depends(get_db)):
-    db_personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+def read_personnel_by_id(
+    personnel_id: int,
+    include_rooms: bool = Query(True),
+    db: Session = Depends(get_db)
+):
+    """Get personnel by ID with their rooms"""
+    query = db.query(PersonnelDB)
+    
+    if include_rooms:
+        query = query.options(joinedload(PersonnelDB.rooms))
+    
+    db_personnel = query.filter(PersonnelDB.id == personnel_id).first()
+    
     if db_personnel is None:
         raise HTTPException(status_code=404, detail="Personnel not found")
     return db_personnel
+
+
 
 # @router.get("/national-code/{national_code}", response_model=PersonnelSchema)
 # def read_personnel_by_national(national_code: str, db: Session = Depends(get_db)):
@@ -398,7 +471,7 @@ def read_personnel(personnel_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{personnel_id}", response_model=PersonnelSchema)
 def update_personnel(personnel_id: int, personnel_update: PersonnelUpdate, db: Session = Depends(get_db)):
-    db_personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    db_personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if db_personnel is None:
         raise HTTPException(status_code=404, detail="Personnel not found")
     
@@ -414,7 +487,7 @@ def update_personnel(personnel_id: int, personnel_update: PersonnelUpdate, db: S
 
 @router.delete("/{personnel_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_personnel(personnel_id: int, db: Session = Depends(get_db)):
-    db_personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    db_personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if db_personnel is None:
         raise HTTPException(status_code=404, detail="Personnel not found")
     
@@ -498,18 +571,21 @@ async def delete_personnel_image(
 
 
     
-
 @router.get("/{personnel_id}/with-images", response_model=PersonnelWithImages)
 async def get_personnel_with_images(
-        request: Request,
-        personnel_id: int,
-        db: Session = Depends(get_db)
+    request: Request,
+    personnel_id: int,
+    db: Session = Depends(get_db)
 ):
     """
-    Get personnel details along with all their images
+    Get personnel details along with all their images and rooms
     """
-    # Get personnel with images
-    personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    # Get personnel with images and rooms (eager loading)
+    personnel = db.query(Personnel)\
+        .options(joinedload(Personnel.images))\
+        .options(joinedload(Personnel.rooms))\
+        .filter(Personnel.id == personnel_id)\
+        .first()
 
     if not personnel:
         raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
@@ -528,6 +604,22 @@ async def get_personnel_with_images(
             )
         )
 
+    # Convert rooms to response schema
+    rooms_response = [
+        RoomResponse(
+            id=room.id,
+            room_number=room.room_number,
+            room_name=room.room_name,
+            room_type=room.room_type,
+            capacity=room.capacity,
+            description=room.description,
+            is_active=room.is_active,
+            created_at=room.created_at,
+            updated_at=room.updated_at
+        )
+        for room in personnel.rooms
+    ]
+
     return PersonnelWithImages(
         id=personnel.id,
         fname=personnel.fname,
@@ -536,10 +628,57 @@ async def get_personnel_with_images(
         staff=personnel.staff,
         department=personnel.department,
         created_at=personnel.created_at,
+        rooms=rooms_response,  # Include rooms
         images=images_response
     )
 
 
+
+
+# Optional: Get only rooms for a personnel
+# ==================== ROOM-RELATED PERSONNEL ENDPOINTS ====================
+
+@router.get("/{personnel_id}/rooms", response_model=List[RoomResponse])
+def get_personnel_rooms_endpoint(
+    personnel_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get all rooms a personnel has access to"""
+    # Use PersonnelDB (SQLAlchemy model) for query
+    personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
+    if not personnel:
+        raise HTTPException(status_code=404, detail="Personnel not found")
+    
+    # Convert SQLAlchemy rooms to Pydantic RoomResponse
+    return [
+        RoomResponse(
+            id=room.id,
+            room_number=room.room_number,
+            room_name=room.room_name,
+            room_type=room.room_type,
+            capacity=room.capacity,
+            description=room.description,
+            is_active=room.is_active,
+            created_at=room.created_at,
+            updated_at=room.updated_at
+        )
+        for room in personnel.rooms
+    ]
+
+
+@router.get("/by-room/{room_id}", response_model=List[PersonnelSchema])
+def get_personnel_by_room(
+    room_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get all personnel who have access to a specific room"""
+    # Use PersonnelDB (SQLAlchemy model) for query
+    personnel_list = db.query(PersonnelDB)\
+        .join(PersonnelDB.rooms)\
+        .filter(RoomDB.id == room_id, RoomDB.is_active == True)\
+        .all()
+    
+    return personnel_list
 
 
 
@@ -559,7 +698,8 @@ def get_personnel_logs_by_id(
     """
     
     # Get personnel by ID
-    personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    # personnel = db.query({PersonnelDB}).filter({PersonnelDB}.id == personnel_id).first()
+    personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if not personnel:
         raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
     
@@ -619,7 +759,7 @@ def get_personnel_logs_by_national_code(
         raise HTTPException(status_code=400, detail=f"Invalid national code format: {str(e)}")
     
     # Get personnel by national code
-    personnel = db.query(Personnel).filter(Personnel.national_code == normalized_code).first()
+    personnel = db.query(PersonnelDB).filter(PersonnelDB.national_code == normalized_code).first()
     if not personnel:
         raise HTTPException(status_code=404, detail=f"Personnel with national code {national_code} not found")
     
@@ -655,39 +795,10 @@ def get_personnel_logs_by_national_code(
 
 
 
-@router.get("/summary")
-def get_logs_summary(
-    from_date: Optional[datetime] = Query(None, description="Start date"),
-    to_date: Optional[datetime] = Query(None, description="End date"),
-    db: Session = Depends(get_db)
-):
-    """Get overall summary for all detection logs"""
-    from sqlalchemy import func
-    
-    query = db.query(DetectionLog)
-    
-    if from_date:
-        query = query.filter(DetectionLog.detection_time >= from_date)
-    if to_date:
-        query = query.filter(DetectionLog.detection_time <= to_date)
-    
-    stats = query.with_entities(
-        func.count(DetectionLog.id).label('total'),
-        func.avg(DetectionLog.confidence).label('avg_conf'),
-        func.min(DetectionLog.detection_time).label('first'),
-        func.max(DetectionLog.detection_time).label('last')
-    ).first()
-    
-    # Get unique personnel count
-    unique_personnel = query.with_entities(DetectionLog.person).distinct().count()
-    
-    return {
-        "total_detections": stats.total or 0,
-        "unique_personnel": unique_personnel,
-        "average_confidence": round(stats.avg_conf, 2) if stats.avg_conf else 0,
-        "first_detection": stats.first,
-        "last_detection": stats.last
-    }
+import logging
+from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -702,7 +813,7 @@ def get_personnel_logs_summary(
     """Get summary statistics of detection logs for a specific personnel"""
     from sqlalchemy import func
     
-    personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if not personnel:
         raise HTTPException(status_code=404, detail="Personnel not found")
     
@@ -895,7 +1006,7 @@ async def create_personnel_with_images(
     Create a new personnel with multiple images in one request
     """
     # Check if national code already exists
-    existing = db.query(Personnel).filter(Personnel.national_code == national_code).first()
+    existing = db.query(PersonnelDB).filter(PersonnelDB.national_code == national_code).first()
     if existing:
         raise HTTPException(status_code=400, detail="کد ملی موجود است!")
     
@@ -904,7 +1015,7 @@ async def create_personnel_with_images(
         raise HTTPException(status_code=400, detail="حد اقل یک تصویر نیاز است!")
     
     # Create new personnel
-    db_personnel = Personnel(
+    db_personnel = PersonnelDB(
         fname=fname,
         lname=lname,
         national_code=national_code,
@@ -1018,7 +1129,7 @@ async def get_personnel_images(
     Get all images for a specific personnel
     """
     # Check if personnel exists
-    personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if not personnel:
         raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
     
@@ -1055,7 +1166,7 @@ async def get_personnel_with_images(
     Get personnel details along with all their images
     """
     # Get personnel with images
-    personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     
     if not personnel:
         raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
@@ -1202,11 +1313,11 @@ async def create_personnel_from_multiple_logs(
     """
 
     # Check if personnel already exists
-    existing = db.query(Personnel).filter(Personnel.national_code == national_code).first()
+    existing = db.query(PersonnelDB).filter(PersonnelDB.national_code == national_code).first()
 
     # If not exists → create personnel
     if not existing:
-        db_personnel = Personnel(
+        db_personnel = PersonnelDB(
             fname=fname,
             lname=lname,
             national_code=national_code,
@@ -1364,12 +1475,12 @@ async def upload_personnel_zip(
                         continue
                 
                 # Check if personnel exists in database, if not create it
-                personnel = db.query(Personnel).filter(Personnel.national_code == national_code).first()
+                personnel = db.query(PersonnelDB).filter(PersonnelDB.national_code == national_code).first()
                 
                 if not personnel:
                     # Create new personnel if it doesn't exist
                     print(f"👤 Personnel not found, creating new record")
-                    personnel = Personnel(
+                    personnel = PersonnelDB(
                         fname=f"فرد_{national_code}",  # Placeholder name
                         lname="",
                         national_code=national_code,
@@ -1508,3 +1619,14 @@ async def upload_personnel_zip(
         "details": results,
         "skipped_folders": skipped_folders if skipped_folders else None
     }
+
+
+# Add these new endpoints for personnel-room relationships
+@router.get("/{personnel_id}/rooms")
+def get_personnel_rooms_list(
+    personnel_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get all rooms a personnel has access to"""
+    rooms = get_personnel_rooms(personnel_id=personnel_id, db=db)
+    return rooms
