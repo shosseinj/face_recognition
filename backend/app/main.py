@@ -360,6 +360,79 @@ async def send_hossein():
         db.close()
 
 
+def frame_generator(sources):
+    """
+    sources: list like:
+        [
+            {"type": "cv2", "src": 0},
+            {"type": "rtsp", "src": "rtsp://..."}
+        ]
+    Yields: (camera_id, frame)
+    """
+
+    cameras = []
+
+    # 🔥 Open all cameras properly
+    for i, cam in enumerate(sources):
+
+        if cam["type"] == "cv2":
+            cap = cv2.VideoCapture(cam["src"])
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            if not cap.isOpened():
+                raise RuntimeError(f"Cannot open camera {cam['src']}")
+
+            cameras.append({
+                "type": "cv2",
+                "reader": cap
+            })
+
+        elif cam["type"] == "rtsp":
+            container = av.open(
+                cam["src"],
+                options={
+                    "rtsp_transport": "tcp",
+                    "flags": "low_delay",
+                    "fflags": "nobuffer"
+                }
+            )
+
+            cameras.append({
+                "type": "rtsp",
+                "reader": container.decode(video=0)
+            })
+
+            print(f"✅ Connected to RTSP {cam['src']}")
+
+    cam_index = 0
+    num_cams = len(cameras)
+
+    # 🔥 Round-robin loop
+    while True:
+        cam = cameras[cam_index]
+
+        frame = None
+
+        if cam["type"] == "cv2":
+            cap = cam["reader"]
+            cap.grab()
+            ret, frame = cap.read()
+            if not ret:
+                cam_index = (cam_index + 1) % num_cams
+                continue
+
+        elif cam["type"] == "rtsp":
+            try:
+                frame = next(cam["reader"])
+                frame = frame.to_ndarray(format="bgr24")
+            except StopIteration:
+                cam_index = (cam_index + 1) % num_cams
+                continue
+
+        # 🔥 Yield in round-robin order
+        yield cam_index, frame
+
+        cam_index = (cam_index + 1) % num_cams
 
 import json
 async def video_broadcaster():
@@ -369,13 +442,13 @@ async def video_broadcaster():
     # Try camera first, fallback to RTSP
     # cap = cv2.VideoCapture('./video6.mp4') 
     # cap = cv2.VideoCapture('http://192.168.50.19:8080/video') 
-    cap = cv2.VideoCapture(0) 
+    # cap = cv2.VideoCapture(0) 
 
-    use_camera = cap.isOpened() 
+    # use_camera = cap.isOpened() and False
 
-    if not use_camera:
-        cap.release()
-        print("📹 Camera not available, trying RTSP stream...")
+    # if not use_camera:
+    #     cap.release()
+    #     print("📹 Camera not available, trying RTSP stream...")
     
 
     with open('./polygon_points.json', 'r') as f:
@@ -383,25 +456,19 @@ async def video_broadcaster():
         # loaded_polygon_points=[]
    
     try_objs = {}
+    sources = [
+    # {"type": "cv2", "src": 'http://192.168.50.19:8080/video'},
+    {"type": "cv2", "src": 0},
+    # {"type": "cv2", "src": 0},
+    # {"type": "rtsp", "src": config.RTSP_URL}
+]
+    gen = frame_generator(sources)
+
 
     while True:
         # cap = cv2.VideoCapture('./video6.mp4') 
         try:
-            if not use_camera:
-                # Add more robust RTSP options
-                container = av.open(config.RTSP_URL, options={
-                    "rtsp_transport": "tcp",
-                    "stimeout": "5000000",  # 5 second timeout
-                    "max_delay": "500000",
-                    "buffer_size": "1024000",
-                    "fflags": "nobuffer+discardcorrupt",  # Discard corrupt frames
-                    "flags": "low_delay",
-                    "reorder_queue_size": "0"  # Disable reordering to avoid POC errors
-                })
-                
-                # Get video stream
-                video_stream = container.streams.video[0]
-                print('✅ Connected to RTSP stream')
+   
             
             clip_length = 100
             half_clip = clip_length // 2
@@ -410,46 +477,15 @@ async def video_broadcaster():
             while True:
                 # Yield control to event loop
                 await asyncio.sleep(0.001)
-                
-                try:
-                    # Get frame from either camera or RTSP
-                    if use_camera:
-                        ret, frame = cap.read()
-                        if not ret:
-                            print("⚠️ Camera read failed")
-                            break
-                    else:
-                        try:
-                            # Add timeout for frame reading
-                            frame_packet = next(container.decode(video_stream))
-                            frame = frame_packet.to_ndarray(format="bgr24")
-                            
-                            # Validate frame
-                            if frame is None or frame.size == 0:
-                                print("⚠️ Received empty frame, skipping...")
-                                continue
-                                
-                            # Reset error counter on successful frame
-                            consecutive_errors = 0
-                            
-                        except StopIteration:
-                            print("⚠️ Stream ended, attempting to reconnect...")
-                            break
-                        except av.AVError as e:
-                            consecutive_errors += 1
-                            print(f"⚠️ AV Error: {e} (attempt {consecutive_errors}/10)")
-                            
-                            if consecutive_errors >= 10:
-                                print("❌ Too many consecutive errors, reconnecting...")
-                                break
-                            
-                            # Skip bad frame and continue
-                            await asyncio.sleep(0.1)
-                            continue
-                    
 
+
+                try:
+
+                    
+                    cam_id, frame = next(gen)
+       
                     data = FrameProcessing(frame, loaded_polygon_points)
-        
+                    data['cam_id'] = cam_id
 
 
                     persons = data['persons'] 
@@ -596,6 +632,7 @@ async def broadcast_frame(data: dict):
     metadata = {
         "type": "video_metadata",
         "persons": data['persons'],
+        "cam_id": data['cam_id'],
         "scores": [float(s) if s is not None else 0.0 for s in data['scores']],
         "objs": data['objs'],
     }

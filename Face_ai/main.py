@@ -501,9 +501,12 @@ def draw(frame, face_bbox, face_landmarks,human_bbox, human_keypoints, collocati
         
             
         if final_bbox_face:
-            margin_x = 0
-            margin_y = 0 
-            
+            if final_name !='Unknown':
+                margin_x = 20
+                margin_y = 20 
+            else:
+                margin_x = 0
+                margin_y = 0 
             x1_face, y1_face, x2_face, y2_face = final_bbox_face   
             y1_m = max(y1_face - margin_y, 0)
             y2_m = min(y2_face + margin_y, frame.shape[0])

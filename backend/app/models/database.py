@@ -211,7 +211,7 @@ def save_detection(
             success = save_video_with_ffmpeg(
                 frames=frames_to_save,
                 output_path=video_path,
-                fps=20,
+                fps=15,
                 quality="medium",
                 for_web=True
             )
@@ -219,7 +219,7 @@ def save_detection(
             # Fallback to OpenCV if FFmpeg fails
             if not success:
                 print("⚠️ FFmpeg failed, trying OpenCV fallback...")
-                success = save_fallback_opencv(frames_to_save, video_path, fps=20)
+                success = save_fallback_opencv(frames_to_save, video_path, fps=15)
             
             if not success:
                 print("❌ Failed to save video with both methods")
@@ -241,7 +241,7 @@ def save_detection(
             success = save_video_with_ffmpeg(
                 frames=face_to_save,
                 output_path=video_path,
-                fps=20,
+                fps=15,
                 quality="medium",
                 for_web=True
             )
@@ -249,7 +249,7 @@ def save_detection(
             # Fallback to OpenCV if FFmpeg fails
             if not success:
                 print("⚠️ FFmpeg failed, trying OpenCV fallback...")
-                success = save_fallback_opencv(face_to_save, video_path, fps=20)
+                success = save_fallback_opencv(face_to_save, video_path, fps=15)
             
             if not success:
                 print("❌ Failed to save video with both methods")
