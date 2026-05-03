@@ -331,10 +331,12 @@ async def send_hossein():
             full_name = 'Unknown'
             person_value = log.person
             
-            if person_value and person_value.isdigit() :
+            if person_value :
                 personnel = personnel_lookup.get(person_value)
                 if personnel:
                     full_name = f"{personnel.fname} {personnel.lname}".strip()
+                else:
+                    full_name = person_value
             if log.area:
                 full_name = full_name + ' - '+ log.area
             
@@ -376,7 +378,7 @@ def frame_generator(sources):
 
         if cam["type"] == "cv2":
             cap = cv2.VideoCapture(cam["src"])
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if not cap.isOpened():
                 raise RuntimeError(f"Cannot open camera {cam['src']}")
@@ -446,14 +448,14 @@ async def video_broadcaster():
     sources = [
     # {"type": "cv2", "src": 'http://192.168.50.19:8080/video'},
     # {"type": "cv2", "src": './video6.mp4'},
-    # {"type": "cv2", "src": 0},
-    {"type": "rtsp", "src": config.RTSP_URL}
+    {"type": "cv2", "src": 0},
+    # {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
 
 
     while True:
-            gen = frame_generator(sources)
+            # gen = frame_generator(sources)
 
     
             
@@ -539,6 +541,8 @@ async def video_broadcaster():
                                                             ]
                                         unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
                                         for area in unique_areas:
+                                            if final_name == 'Unknown':
+                                                final_name = final_name +' #' + str(obj)
                                             log_id = save_detection_with_face(
                                                 person=final_name,
                                                 confidence=float(final_score),

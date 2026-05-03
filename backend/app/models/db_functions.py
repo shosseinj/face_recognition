@@ -63,7 +63,6 @@ def save_detection(
     log_id = None
     video_path = None
     access_granted = None
-    denial_reason = None
     
     try:
         # Look for recent detection of the same person (within 60 seconds)
@@ -135,28 +134,23 @@ def save_detection(
                     
                     if access:
                         access_granted = True
-                        denial_reason = None
                         print(f"✅ {person} has access to room {room_id}")
                     else:
                         access_granted = False
-                        denial_reason = "no_access"
                         print(f"❌ {person} does NOT have access to room {room_id}")
                 else:
                     access_granted = False
-                    denial_reason = "personnel_not_found"
                     print(f"⚠️ Personnel not found for name: {person}")
             else:
                 access_granted = False
-                denial_reason = "invalid_name_format"
                 print(f"⚠️ Invalid name format: {person}")
         elif 'Unknown' in person:
             access_granted = False
-            denial_reason = "unknown_person"
             print(f"⚠️ Unknown person detected - access denied")
         else:
             # No room specified, just logging detection
             access_granted = None
-            denial_reason = None
+          
 
         # Save video if frames provided
         if save_video and frames_to_save and len(frames_to_save) > 0:
@@ -227,7 +221,6 @@ def save_detection(
             area=area,
             room_id=room_id,
             access_granted=access_granted,  # NEW
-            denial_reason=denial_reason  # NEW
         )
 
         db.add(detection)
@@ -253,7 +246,7 @@ def save_detection(
         # Print access summary
         if room_id:
             status = "GRANTED" if access_granted else "DENIED"
-            print(f"🔐 Access {status} for {person} to room {room_id} - Reason: {denial_reason or 'N/A'}")
+            print(f"🔐 Access {status} for {person} to room {room_id} ")
         
         print(f"✅ Saved detection: {person} ({confidence:.2f}) with ID: {log_id}")
         return log_id
@@ -764,149 +757,3 @@ def check_room_access(personnel_id: int, room_id: int, db: Session = None):
         if close_db:
             db.close()
 
-
-# ==================== ROOM ACCESS LOG FUNCTIONS ====================
-# In db_functions.py - Fix your log_room_access function
-
-# def log_room_access(
-#     personnel_id: int,
-#     room_id: int,
-#     access_granted: bool,
-#     face_confidence: float = None,  # Make sure this parameter exists
-#     denial_reason: str = None,
-#     camera_id: int = None,
-#     db: Session = None
-# ):
-#     """Log an access attempt to a room"""
-#     close_db = False
-#     if db is None:
-#         db = SessionLocal()
-#         close_db = True
-    
-#     try:
-#         # First, verify personnel exists
-#         personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
-#         if not personnel:
-#             print(f"❌ Personnel {personnel_id} not found")
-#             return None
-        
-#         # Verify room exists
-#         room = db.query(Room).filter(Room.id == room_id).first()
-#         if not room:
-#             print(f"❌ Room {room_id} not found")
-#             return None
-        
-#         # Create access log
-#         access_log = RoomAccessLog(
-#             personnel_id=personnel_id,
-#             room_id=room_id,
-#             access_time=datetime.now(),
-#             access_granted=access_granted,
-#             face_confidence=face_confidence,  # Now this works
-#             denial_reason=denial_reason if not access_granted else None
-#         )
-        
-#         db.add(access_log)
-#         db.commit()
-#         db.refresh(access_log)
-        
-#         print(f"✅ Access logged: {access_granted} for personnel {personnel_id}")
-#         return access_log
-        
-#     except Exception as e:
-#         print(f"❌ Error in log_room_access: {e}")
-#         import traceback
-#         traceback.print_exc()
-#         db.rollback()
-#         return None
-#     finally:
-#         if close_db:
-#             db.close()
-# def get_access_logs(
-#     room_id: int = None,
-#     personnel_id: int = None,
-#     start_date: datetime = None,
-#     end_date: datetime = None,
-#     access_granted: bool = None,
-#     limit: int = 100,
-#     db: Session = None
-# ):
-#     """Query access logs with filters"""
-#     close_db = False
-#     if db is None:
-#         db = SessionLocal()
-#         close_db = True
-    
-#     try:
-#         query = db.query(RoomAccessLog)
-        
-#         if room_id:
-#             query = query.filter(RoomAccessLog.room_id == room_id)
-#         if personnel_id:
-#             query = query.filter(RoomAccessLog.personnel_id == personnel_id)
-#         if start_date:
-#             query = query.filter(RoomAccessLog.access_time >= start_date)
-#         if end_date:
-#             query = query.filter(RoomAccessLog.access_time <= end_date)
-#         if access_granted is not None:
-#             query = query.filter(RoomAccessLog.access_granted == access_granted)
-        
-#         return query.order_by(RoomAccessLog.access_time.desc()).limit(limit).all()
-#     finally:
-#         if close_db:
-#             db.close()
-
-
-# def get_access_statistics(
-#     room_id: int = None, 
-#     personnel_id: int = None,
-#     days: int = 30, 
-#     db: Session = None
-# ):
-#     """Get access statistics"""
-#     close_db = False
-#     if db is None:
-#         db = SessionLocal()
-#         close_db = True
-    
-#     try:
-#         start_date = datetime.now() - timedelta(days=days)
-        
-#         query = db.query(RoomAccessLog).filter(RoomAccessLog.access_time >= start_date)
-        
-#         if room_id:
-#             query = query.filter(RoomAccessLog.room_id == room_id)
-#         if personnel_id:
-#             query = query.filter(RoomAccessLog.personnel_id == personnel_id)
-        
-#         total_attempts = query.count()
-#         granted = query.filter(RoomAccessLog.access_granted == True).count()
-#         denied = total_attempts - granted
-        
-#         # Denial reasons breakdown
-#         denial_stats = db.query(
-#             RoomAccessLog.denial_reason,
-#             func.count(RoomAccessLog.id)
-#         ).filter(
-#             RoomAccessLog.access_time >= start_date,
-#             RoomAccessLog.access_granted == False
-#         )
-        
-#         if room_id:
-#             denial_stats = denial_stats.filter(RoomAccessLog.room_id == room_id)
-#         if personnel_id:
-#             denial_stats = denial_stats.filter(RoomAccessLog.personnel_id == personnel_id)
-        
-#         denial_stats = denial_stats.group_by(RoomAccessLog.denial_reason).all()
-        
-#         return {
-#             "period_days": days,
-#             "total_attempts": total_attempts,
-#             "granted": granted,
-#             "denied": denied,
-#             "grant_rate": granted / total_attempts if total_attempts > 0 else 0,
-#             "denial_reasons": {reason or "unknown": count for reason, count in denial_stats}
-#         }
-#     finally:
-#         if close_db:
-#             db.close()

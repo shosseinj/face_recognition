@@ -63,7 +63,7 @@ class DetectionLogResponse(BaseModel):
     full_name: Optional[str] = "None"
     room_id: Optional[int] = None
     access_granted: Optional[bool] = None
-    denial_reason: Optional[str] = None
+
     
     class Config:
         from_attributes = True
