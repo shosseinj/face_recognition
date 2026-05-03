@@ -121,54 +121,64 @@ config = Config()
 # At the top of your main.py, add this class
 class WebSocketManager:
     def __init__(self):
-        self.active_connections: Dict[str, Set[WebSocket]] = {}  # camera_id -> set of connections
-        self.all_connections: Set[WebSocket] = set()  # For global broadcast if needed
-        self._lock = asyncio.Lock()
+        self.active_connections: Set[WebSocket] = set()
+        self._lock = asyncio.Lock()  # For thread safety
     
-    async def connect(self, websocket: WebSocket, camera_id: str = "all"):
+    async def connect(self, websocket: WebSocket):
         await websocket.accept()
         async with self._lock:
-            if camera_id not in self.active_connections:
-                self.active_connections[camera_id] = set()
-            self.active_connections[camera_id].add(websocket)
-            self.all_connections.add(websocket)
-        print(f"✅ Client connected to camera '{camera_id}'. Total: {len(self.all_connections)}")
+            self.active_connections.add(websocket)
+        print(f"✅ Client connected. Total: {len(self.active_connections)}")
     
-    async def disconnect(self, websocket: WebSocket):
+    async def disconnect(self, websocket: WebSocket):  # ✅ Add async here
         async with self._lock:
-            self.all_connections.discard(websocket)
-            for camera_id in list(self.active_connections.keys()):
-                self.active_connections[camera_id].discard(websocket)
-                if not self.active_connections[camera_id]:
-                    del self.active_connections[camera_id]
-        print(f"❌ Client disconnected. Total: {len(self.all_connections)}")
+            self.active_connections.discard(websocket)
+        print(f"❌ Client disconnected. Total: {len(self.active_connections)}")
     
-    async def broadcast_to_camera(self, camera_id: str, frame_bytes: bytes, metadata: dict):
-        """Broadcast to clients subscribed to specific camera"""
-        if camera_id not in self.active_connections:
+    async def broadcast_json(self, message: dict):
+        """Send JSON to all connected clients"""
+        if not self.active_connections:
             return
         
         disconnected = []
-        connections = list(self.active_connections[camera_id])
+        async with self._lock:
+            connections = list(self.active_connections)
         
-        # Send frame and metadata
         for connection in connections:
             try:
-                await connection.send_bytes(frame_bytes)
-                await connection.send_json(metadata)
+                await connection.send_json(message)
+            except Exception as e:
+                print(f"Failed to send to client: {e}")
+                disconnected.append(connection)
+        
+        # Clean up dead connections
+        async with self._lock:
+            for conn in disconnected:
+                self.active_connections.discard(conn)
+    
+    async def broadcast_bytes(self, data: bytes):
+        """Send bytes to all connected clients"""
+        if not self.active_connections:
+            return
+        
+        disconnected = []
+        async with self._lock:
+            connections = list(self.active_connections)
+        
+        for connection in connections:
+            try:
+                await connection.send_bytes(data)
             except Exception:
                 disconnected.append(connection)
         
-        # Cleanup disconnected clients
-        if disconnected:
-            async with self._lock:
-                for conn in disconnected:
-                    self.active_connections[camera_id].discard(conn)
-                    self.all_connections.discard(conn)
+        async with self._lock:
+            for conn in disconnected:
+                self.active_connections.discard(conn)
     
     @property
     def count(self) -> int:
-        return len(self.all_connections)
+        return len(self.active_connections)
+
 
 
 # Create global instance
@@ -211,97 +221,33 @@ async def video_page():
         # Fallback in case file is not found
         return HTMLResponse(content="<h1>Video page template not found</h1>", status_code=404)
 
-async def handle_camera_switch(websocket: WebSocket, new_camera_id: str):
-    """Handle client switching from one camera to another"""
-    # Find which camera this client is currently subscribed to
-    old_camera_id = None
-    async with manager._lock:
-        for cam_id, connections in manager.active_connections.items():
-            if websocket in connections:
-                old_camera_id = cam_id
-                break
-    
-    # If already subscribed to this camera, do nothing
-    if old_camera_id == new_camera_id:
-        await websocket.send_json({
-            "type": "subscription",
-            "status": "already_subscribed",
-            "camera_id": new_camera_id
-        })
-        return
-    
-    # Remove from old camera
-    if old_camera_id:
-        async with manager._lock:
-            if old_camera_id in manager.active_connections:
-                manager.active_connections[old_camera_id].discard(websocket)
-                if not manager.active_connections[old_camera_id]:
-                    del manager.active_connections[old_camera_id]
-        
-        await websocket.send_json({
-            "type": "subscription",
-            "status": "unsubscribed",
-            "camera_id": old_camera_id
-        })
-    
-    # Add to new camera
-    async with manager._lock:
-        if new_camera_id not in manager.active_connections:
-            manager.active_connections[new_camera_id] = set()
-        manager.active_connections[new_camera_id].add(websocket)
-    
-    # Send confirmation to client
-    await websocket.send_json({
-        "type": "subscription",
-        "status": "subscribed",
-        "camera_id": new_camera_id,
-        "message": f"Switched from {old_camera_id} to {new_camera_id}" if old_camera_id else f"Subscribed to {new_camera_id}"
-    })
-    
-    print(f"🔄 Client switched camera: {old_camera_id} -> {new_camera_id}")
 
 
-@app.websocket("/ws/{camera_id}")
-async def websocket_endpoint(websocket: WebSocket, camera_id: str):
-    """Client connects to specific camera feed"""
-    await manager.connect(websocket, camera_id)
+
+@app.websocket("/ws/video")
+async def video_ws(websocket: WebSocket):
+    await manager.connect(websocket)
     try:
-        # Keep connection alive
+        await send_hossein()
+    except Exception as e:
+        print(f"⚠️ Error sending initial logs: {e}")
+
+    try:
         while True:
-            # Receive subscription updates if needed
-            data = await websocket.receive_text()
-            # Handle client commands (change camera, etc.)
-            if data.startswith("subscribe:"):
-                new_camera = data.split(":")[1]
-                await handle_camera_switch(websocket, new_camera)
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(), 
+                    timeout=30.0
+                )
+                # Process messages...
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
+                continue
     except WebSocketDisconnect:
-        await manager.disconnect(websocket)
-
-
-# @app.websocket("/ws/video")
-# async def video_ws(websocket: WebSocket):
-#     await manager.connect(websocket)
-#     try:
-#         await send_hossein()
-#     except Exception as e:
-#         print(f"⚠️ Error sending initial logs: {e}")
-
-#     try:
-#         while True:
-#             try:
-#                 data = await asyncio.wait_for(
-#                     websocket.receive_text(), 
-#                     timeout=30.0
-#                 )
-#                 # Process messages...
-#             except asyncio.TimeoutError:
-#                 await websocket.send_json({"type": "ping"})
-#                 continue
-#     except WebSocketDisconnect:
-#         await manager.disconnect(websocket)  # ✅ Add await
-#     except Exception as e:
-#         print(f"Error: {e}")
-#         await manager.disconnect(websocket)  # ✅ Add await
+        await manager.disconnect(websocket)  # ✅ Add await
+    except Exception as e:
+        print(f"Error: {e}")
+        await manager.disconnect(websocket)  # ✅ Add await
 
 
 
@@ -482,127 +428,6 @@ def frame_generator(sources):
         cam_index = (cam_index + 1) % num_cams
 
 import json
-
-async def process_frame(model,loaded_polygon_points, frame, cam_id, polygon_points, try_objs, track_history):
-    
-    clip_length = 100
-    half_clip = clip_length // 2
-    # data = {
-    #                         "frames": frame,
-    #                         "persons": [],
-    #                         "scores":[],
-    #                         "faces": [],
-    #                         "objs": [],
-    #                         "ref_img_ids": [],
-    #                         "area": [],
-    #                     }
-    data = model.FrameProcessing(frame, loaded_polygon_points)
-    data['cam_id'] = cam_id
-
-    persons = data['persons'] 
-    scores = data['scores']
-    
-    faces = data['faces']
-    areas = data['area']
-    objs = data['objs']
-    ref_img_ids = data['ref_img_ids']
-
-    current_objs = set(objs)
-
-
-    for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
-        history = track_history[obj]
-        history["frames"].append(frame.copy())
-        
-        if person:
-            history["ref_img_ids"].append(ref_img_id)
-            history["names"].append(person)
-            history["scores"].append(score)
-            history["faces"].append(face)
-            history["areas"].append(area)
-
-
-    disappeared_objs = set(track_history.keys()) - current_objs
-    
-    for obj in current_objs:
-        try_objs.pop(obj, None) 
-
-    for obj in disappeared_objs:
-        try_objs[obj] = try_objs.get(obj, 0) + 1
-
-    
-    for obj, count in list(try_objs.items()):
-        if count > 70:
-            if history["names"]:
-                history = track_history[obj]
-                name_counts = Counter(history["names"])
-                final_name, count = name_counts.most_common(1)[0]
-
-                valid_indices = [i for i, n in enumerate(history["names"]) if n == final_name]
-
-                if valid_indices:
-                    best_idx = max(valid_indices, key=lambda i: history["scores"][i])
-                    final_score = history["scores"][best_idx]
-                    final_face = history["faces"][best_idx]
-                    final_ref_img_id = history["ref_img_ids"][best_idx]
-
-                    start_idx = max(0, best_idx - half_clip)
-                    end_idx = min(len(history["frames"]), best_idx + half_clip)
-                    frames_to_save = list(history["frames"])[start_idx:end_idx]
-
-                    valid_entries = [
-                                        (i, name, score, face, ref_id, area, frame) 
-                                        for i, (name, score, face, ref_id, area, frame) in enumerate(zip(
-                                            history["names"], history["scores"], history["faces"], 
-                                            history["ref_img_ids"], history["areas"], history["frames"]
-                                        )) 
-                                            if area != 'OUT'
-                                        ]
-                    unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
-                    for area in unique_areas:
-                        if final_name == 'Unknown':
-                            final_name = final_name +' #' + str(obj)
-                        log_id = save_detection_with_face(
-                            person=final_name,
-                            confidence=float(final_score),
-                            face_image=final_face,
-                            ref_img_id=final_ref_img_id,
-                            frames_to_save=frames_to_save, 
-                            face_to_save=history['faces'],
-                            area= area,
-                            save_video= False
-                        )
-                        if log_id is not None:
-                            asyncio.create_task(send_hossein())
-        
-            del track_history[obj]
-            del try_objs[obj]
-    return data    
-
-
-async def broadcast_frame_to_camera(data: dict, cam_id: str):
-    """Broadcast frame and metadata for specific camera"""
-    frame = data['frames']
-    
-    success, encoded_frame = cv2.imencode('.jpg', frame, 
-                                          [cv2.IMWRITE_JPEG_QUALITY, 85])
-    
-    if not success:
-        return
-    
-    frame_bytes = encoded_frame.tobytes()
-    metadata = {
-        "type": "video_metadata",
-        "cam_id": cam_id,
-        "persons": data['persons'],
-        "scores": [float(s) if s is not None else 0.0 for s in data['scores']],
-        "objs": data['objs'],
-        "timestamp": time.time()
-    }
-    
-    await manager.broadcast_to_camera(str(cam_id), frame_bytes, metadata)
-
-
 async def video_broadcaster():
     """Background task that streams video and saves detections automatically"""
     print("🎬 Starting video broadcaster...")
@@ -613,25 +438,119 @@ async def video_broadcaster():
    
     try_objs = {}
     sources = [
-    {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
-    # {"type": "cv2", "src": './video6.mp4'},
+    # {"type": "cv2", "src": 'http://192.168.50.19:8080/video'},
+    {"type": "cv2", "src": './video6.mp4'},
     {"type": "cv2", "src": 0},
     # {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
-    model = ModelManager()
-    model.initialize()
- 
+    # model = ModelManager()
+    # model.initialize()
+    while True:            
+            clip_length = 100
+            half_clip = clip_length // 2
 
-    while True:
-        # Yield control to event loop
-            await asyncio.sleep(0.001) 
-            cam_id, frame = next(gen) 
-            # data = model.FrameProcessing(frame, loaded_polygon_points)
-            data = await process_frame(model, loaded_polygon_points, frame, cam_id, loaded_polygon_points, try_objs, track_history)
+            while True:
+                # Yield control to event loop
+                    await asyncio.sleep(0.001) 
+                    cam_id, frame = next(gen) 
+                    # data = model.FrameProcessing(frame, loaded_polygon_points)
+                    data = {
+                            "frames": frame,
+                            "persons": [],
+                            "scores":[],
+                            "faces": [],
+                            "objs": [],
+                            "ref_img_ids": [],
+                            "area": [],
+                        }
+
+                    data['cam_id'] = cam_id
+
+                    persons = data['persons'] 
+                    scores = data['scores']
+                    
+                    faces = data['faces']
+                    areas = data['area']
+                    objs = data['objs']
+                    ref_img_ids = data['ref_img_ids']
+
+                    current_objs = set(objs)
+
+               
+                    for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
+                        history = track_history[obj]
+                        history["frames"].append(frame.copy())
+                        
+                        if person:
+                            history["ref_img_ids"].append(ref_img_id)
+                            history["names"].append(person)
+                            history["scores"].append(score)
+                            history["faces"].append(face)
+                            history["areas"].append(area)
             
-            if manager.count > 0:
-                asyncio.create_task(broadcast_frame_to_camera(data, cam_id))
+
+                    disappeared_objs = set(track_history.keys()) - current_objs
+                    
+                    for obj in current_objs:
+                        try_objs.pop(obj, None) 
+
+                    for obj in disappeared_objs:
+                        try_objs[obj] = try_objs.get(obj, 0) + 1
+
+                   
+                    for obj, count in list(try_objs.items()):
+                        if count > 70:
+
+                            if history["names"]:
+                                history = track_history[obj]
+
+                                if history["names"]:
+                                    name_counts = Counter(history["names"])
+                                    final_name, count = name_counts.most_common(1)[0]
+
+                                    valid_indices = [i for i, n in enumerate(history["names"]) if n == final_name]
+
+                                    if valid_indices:
+                                        best_idx = max(valid_indices, key=lambda i: history["scores"][i])
+                                        final_score = history["scores"][best_idx]
+                                        final_face = history["faces"][best_idx]
+                                        final_ref_img_id = history["ref_img_ids"][best_idx]
+
+                                        start_idx = max(0, best_idx - half_clip)
+                                        end_idx = min(len(history["frames"]), best_idx + half_clip)
+                                        frames_to_save = list(history["frames"])[start_idx:end_idx]
+
+                                        valid_entries = [
+                                                            (i, name, score, face, ref_id, area, frame) 
+                                                            for i, (name, score, face, ref_id, area, frame) in enumerate(zip(
+                                                                history["names"], history["scores"], history["faces"], 
+                                                                history["ref_img_ids"], history["areas"], history["frames"]
+                                                            )) 
+                                                                if area != 'OUT'
+                                                            ]
+                                        unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
+                                        for area in unique_areas:
+                                            if final_name == 'Unknown':
+                                                final_name = final_name +' #' + str(obj)
+                                            log_id = save_detection_with_face(
+                                                person=final_name,
+                                                confidence=float(final_score),
+                                                face_image=final_face,
+                                                ref_img_id=final_ref_img_id,
+                                                frames_to_save=frames_to_save, 
+                                                face_to_save=history['faces'],
+                                                area= area,
+                                                save_video= False
+                                            )
+                                            if log_id is not None:
+                                                asyncio.create_task(send_hossein())
+                            
+                            del track_history[obj]
+                            del try_objs[obj]
+                        
+                    if manager.count > 0:
+                        asyncio.create_task(broadcast_frame(data))
 
 
 def save_disappeared_object(obj, history):

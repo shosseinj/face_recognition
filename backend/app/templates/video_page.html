@@ -225,7 +225,8 @@
     </div>
 
     <script>
-      const ws = new WebSocket("ws://" + location.host + "/ws/video");
+      console.log(" location.host", location.host);
+      const ws = new WebSocket("ws://127.0.0.1:9000/ws/1");
       ws.binaryType = "blob";
 
       const logsContainer = document.getElementById("logs-container");
@@ -240,6 +241,7 @@
 
       function formatLogEntry(log) {
         let imageHtml = "";
+        debugger;
         if (log.face_image_base64) {
           imageHtml = `<img class="face-image"
                         src="data:image/jpeg;base64,${log.face_image_base64}"
