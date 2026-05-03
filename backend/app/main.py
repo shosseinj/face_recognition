@@ -438,21 +438,6 @@ async def video_broadcaster():
     """Background task that streams video and saves detections automatically"""
     print("🎬 Starting video broadcaster...")
     
-    # Try camera first, fallback to RTSP
-    cap = cv2.VideoCapture('./video6.mp4') 
-    # cap = cv2.VideoCapture('http://192.168.50.19:8080/video') 
-    # cap = cv2.VideoCapture(0) 
-
-<<<<<<< Updated upstream
-    # use_camera = cap.isOpened() and False
-=======
-    use_camera = cap.isOpened()# or True
->>>>>>> Stashed changes
-
-    # if not use_camera:
-    #     cap.release()
-    #     print("📹 Camera not available, trying RTSP stream...")
-    
 
     with open('./polygon_points.json', 'r') as f:
         loaded_polygon_points = json.load(f)
@@ -460,28 +445,25 @@ async def video_broadcaster():
     try_objs = {}
     sources = [
     # {"type": "cv2", "src": 'http://192.168.50.19:8080/video'},
-    {"type": "cv2", "src": 0},
+    # {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": 0},
-    # {"type": "rtsp", "src": config.RTSP_URL}
+    {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
 
 
     while True:
-        cap = cv2.VideoCapture('./video6.mp4') 
-        try:
-   
+            gen = frame_generator(sources)
+
+    
             
             clip_length = 100
             half_clip = clip_length // 2
-            consecutive_errors = 0
 
             while True:
                 # Yield control to event loop
-                await asyncio.sleep(0.001)
+                    await asyncio.sleep(0.001)
 
-
-                try:
 
                     
                     cam_id, frame = next(gen)
@@ -580,27 +562,9 @@ async def video_broadcaster():
                     # Yield after processing
                     await asyncio.sleep(0)
                     
-                except Exception as frame_error:
-                    print(f"⚠️ Error processing frame: {frame_error}")
-                    consecutive_errors += 1
-                    
-                    if consecutive_errors >= 10:
-                        print("❌ Too many consecutive frame errors, reconnecting...")
-                        break
-                    
-                    await asyncio.sleep(0.05)
-                    continue
+
                         
-        except Exception as e:
-            print(f"⚠️ Stream connection error: {e}")
-            print("🔄 Reconnecting in 5 seconds...")
-            await asyncio.sleep(5)
-        finally:
-            if not use_camera and 'container' in locals():
-                try:
-                    container.close()
-                except:
-                    pass
+
 
 def save_disappeared_object(obj, history):
     """Save a disappeared object to database"""

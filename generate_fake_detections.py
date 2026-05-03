@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 import sys
 import re
 import urllib
+import asyncio  # ← For asyncio.to_thread
 
 # Add your project path to sys.path if needed
 sys.path.append(r"C:\Users\mohammadloo.r\Desktop\ai")
@@ -201,14 +202,19 @@ def generate_fake_detections(num_detections=100):
                 print(f"\n📹 Creating video {i+1}/{num_detections}: {video_filename}")
                 
                 # Save with FFmpeg
-                success = save_video_with_ffmpeg(
-                    frames=frames,
-                    output_path=str(video_path),
-                    fps=20,
-                    quality="medium",
-                    for_web=True
-                )
+                # success = save_video_with_ffmpeg(
+                #     frames=frames,
+                #     output_path=str(video_path),
+                #     fps=20,
+                #     quality="medium",
+                #     for_web=True
+                # )
                 
+                success = await asyncio.to_thread(
+                    save_video_with_ffmpeg,  # Original sync function
+                    frames, str(video_path), 20, "medium", True
+                )
+                                
                 if not success:
                     print(f"⚠️ FFmpeg failed for video {i+1}, skipping...")
                     skipped_count += 1
@@ -348,8 +354,19 @@ def generate_detections_for_specific_person(national_code, num_detections=20):
             video_path = video_dir / video_filename
             
             print(f"\n📹 Creating video for {person.fname}: {video_filename}")
-            save_video_with_ffmpeg(frames, str(video_path), fps=20)
+
+            # save_video_with_ffmpeg(frames, str(video_path), fps=20)
+            await asyncio.to_thread(
+                save_video_with_ffmpeg,
+                frames,
+                str(video_path),
+                20,      # fps
+                "veryslow", # quality
+                True     # for_web
+            )
             
+
+
             # Save face - FIXED FILENAME
             timestamp_long = detection_time.strftime('%Y%m%d_%H%M%S_%f')[:-3]
             confidence_str = f"{confidence:.2f}".replace(".", "_")  # Replace dot with underscore
