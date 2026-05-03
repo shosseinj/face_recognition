@@ -43,7 +43,7 @@ from datetime import datetime
 from typing import Optional
 # from .detections import get_face_image_url, get_video_url
 from ..utils import get_face_image_url, get_video_url
-from Face_ai.main import FaceEmbedding, DeletePointVD, FaceEmbeddingWithoutDetection, FaceCropping, FaceEmbeddingCropping
+# from Face_ai.main import  DeletePointVD, model_mgr.FaceEmbeddingWithoutDetection,  model_mgr.FaceEmbeddingCropping
 from ..models.schemas import (
     DetectionLogCreate, DetectionLogResponse, 
     PersonnelImageCreate, PersonnelImageResponse, PersonnelWithImages, PersonnelFromLogsRequest
@@ -53,7 +53,8 @@ from ..models.db_functions import get_db
 import numpy as np
 import zipfile
 
-
+from Face_ai.main import ModelManager
+model_mgr = ModelManager()
 
 
 @router.get("/import-template")
@@ -497,7 +498,7 @@ def delete_personnel(personnel_id: int, db: Session = Depends(get_db)):
     for image in images:
         print(f"\n🗑️ Deleting face embeddings for image ID: {image.id}")
         # delete_faces_from_vector_database(image.id)
-        DeletePointVD(image.id)
+        model_mgr.DeletePointVD(image.id)
     
     # Also delete physical files (optional - you might want to do this too)
     from pathlib import Path
@@ -539,7 +540,7 @@ async def delete_personnel_image(
     print(f"\n🗑️ Deleting image ID: {image_id}")
     
     # STEP 1: Delete from vector database
-    DeletePointVD(image_id)
+    model_mgr.DeletePointVD(image_id)
     
     # STEP 2: Delete from database
     try:
@@ -923,7 +924,7 @@ async def add_images_to_personnel(
             # Now add to vector database with ref_img_id
             try:
                 # Use the stored image data
-                FaceEmbeddingWithoutDetection(image.img_data, personnel.national_code, ref_img_id=db_image.id)
+                model_mgr.FaceEmbeddingWithoutDetection(image.img_data, personnel.national_code, ref_img_id=db_image.id)
 
                 print(f"imgae data {image.img_data}, national code {personnel.national_code}, ref img id {db_image.id}")
                 print(f"✅ Added to vector DB with ref_img_id: {db_image.id}")
@@ -1070,7 +1071,7 @@ async def create_personnel_with_images(
                 raise HTTPException(status_code=400, detail=f"Cannot read image: {image.filename}")
             
             # Call the correct function to create Qdrant points
-            FaceEmbeddingWithoutDetection(img, national_code, ref_img_id=db_image.id)
+            model_mgr.FaceEmbeddingWithoutDetection(img, national_code, ref_img_id=db_image.id)
             
             saved_images.append(db_image)
         
@@ -1378,7 +1379,7 @@ async def create_personnel_from_multiple_logs(
         if img is None:
             raise HTTPException(status_code=400, detail=f"Cannot read image for log {log_id}")
 
-        FaceEmbeddingWithoutDetection(img, national_code, ref_img_id=db_image.id)
+        model_mgr.FaceEmbeddingWithoutDetection(img, national_code, ref_img_id=db_image.id)
 
         db.commit()
         db.refresh(db_personnel)
@@ -1553,7 +1554,7 @@ async def upload_personnel_zip(
                         
                         # Save to vector database with ref_img_id
                         print(f"     🔄 Adding to vector database with ref_img_id: {db_image.id}")
-                        cropped_img = FaceEmbeddingCropping(img, national_code,  ref_img_id=db_image.id)
+                        cropped_img = model_mgr.FaceEmbeddingCropping(img, national_code,  ref_img_id=db_image.id)
                         cv2.imwrite(str(file_path), cropped_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
                       

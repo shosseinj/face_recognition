@@ -46,10 +46,9 @@ from sqlalchemy.orm import Session
 from .models.db_functions import save_detection_with_face, get_db
 from .models.database import DetectionLog, Personnel
 from .api import router as api_router
-# from Detection.TensorRT.infer import ws_transfer, vectorDatabase, removeDatabase
 from io import BytesIO  # IMPORT THIS!
-from Face_ai.main import FrameProcessing, FaceEmbedding, FaceEmbeddingCropping
-
+# from Face_ai.main import FrameProcessing, FaceEmbedding, FaceEmbeddingCropping
+from Face_ai.main import ModelManager
 
 
 processor_task = None
@@ -266,13 +265,6 @@ track_history = defaultdict(lambda: {
     "areas": deque(maxlen=VOTE_WINDOW),
 })
 
-
-
-
-
-
-
-
 async def send_hossein():
     """Broadcast new detection to all connected clients with full name"""
     offset = 0
@@ -447,32 +439,33 @@ async def video_broadcaster():
     try_objs = {}
     sources = [
     # {"type": "cv2", "src": 'http://192.168.50.19:8080/video'},
-    # {"type": "cv2", "src": './video6.mp4'},
+    {"type": "cv2", "src": './video6.mp4'},
     {"type": "cv2", "src": 0},
     # {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
-
-
-    while True:
-            # gen = frame_generator(sources)
-
-    
-            
+    # model = ModelManager()
+    # model.initialize()
+    while True:            
             clip_length = 100
             half_clip = clip_length // 2
 
             while True:
                 # Yield control to event loop
-                    await asyncio.sleep(0.001)
+                    await asyncio.sleep(0.001) 
+                    cam_id, frame = next(gen) 
+                    # data = model.FrameProcessing(frame, loaded_polygon_points)
+                    data = {
+                            "frames": frame,
+                            "persons": [],
+                            "scores":[],
+                            "faces": [],
+                            "objs": [],
+                            "ref_img_ids": [],
+                            "area": [],
+                        }
 
-
-                    
-                    cam_id, frame = next(gen)
-       
-                    data = FrameProcessing(frame, loaded_polygon_points)
                     data['cam_id'] = cam_id
-
 
                     persons = data['persons'] 
                     scores = data['scores']
@@ -481,24 +474,21 @@ async def video_broadcaster():
                     areas = data['area']
                     objs = data['objs']
                     ref_img_ids = data['ref_img_ids']
-            
-
 
                     current_objs = set(objs)
 
-                    try:
-                        for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
-                            history = track_history[obj]
-                            history["frames"].append(frame.copy())
-                            
-                            if person:
-                                history["ref_img_ids"].append(ref_img_id)
-                                history["names"].append(person)
-                                history["scores"].append(score)
-                                history["faces"].append(face)
-                                history["areas"].append(area)
-                    except Exception as e:
-                        print(f'Error updating history: {e}')
+               
+                    for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
+                        history = track_history[obj]
+                        history["frames"].append(frame.copy())
+                        
+                        if person:
+                            history["ref_img_ids"].append(ref_img_id)
+                            history["names"].append(person)
+                            history["scores"].append(score)
+                            history["faces"].append(face)
+                            history["areas"].append(area)
+            
 
                     disappeared_objs = set(track_history.keys()) - current_objs
                     
@@ -508,7 +498,7 @@ async def video_broadcaster():
                     for obj in disappeared_objs:
                         try_objs[obj] = try_objs.get(obj, 0) + 1
 
-                    # Process disappeared objects
+                   
                     for obj, count in list(try_objs.items()):
                         if count > 70:
 
@@ -559,15 +549,8 @@ async def video_broadcaster():
                             del track_history[obj]
                             del try_objs[obj]
                         
-                    # Broadcast video frame to clients IF ANY ARE CONNECTED
                     if manager.count > 0:
                         asyncio.create_task(broadcast_frame(data))
-                    
-                    # Yield after processing
-                    await asyncio.sleep(0)
-                    
-
-                        
 
 
 def save_disappeared_object(obj, history):
@@ -728,61 +711,7 @@ async def shutdown_event():
             pass
     print("Video broadcaster stopped")
 
-# Define Pydantic model for request body
-# class SaveRequest(BaseModel):
-#     id: int
-#     name_front: str
 
-# @app.post("/ws-save")
-# async def save_detection(
-#     request: SaveRequest,
-#     db: Session = Depends(get_db)
-# ):
-#     """Save a detection to the vector database"""
-#     print(f'Processing save request for ID: {request.id}, name: {request.name_front}')
-    
-#     try:
-#         # Get detection log
-#         detection_log = db.query(DetectionLog).filter(DetectionLog.id == request.id).first()
-        
-#         if not detection_log:
-#             raise HTTPException(status_code=404, detail=f"Detection log with ID {request.id} not found")
-        
-#         if not detection_log.face_image_path:
-#             raise HTTPException(status_code=400, detail="No face image path found in this log entry")
-        
-#         if not os.path.exists(detection_log.face_image_path):
-#             raise HTTPException(status_code=404, detail=f"Face image file not found at: {detection_log.face_image_path}")
-        
-#         # Read and process image
-#         img = cv2.imread(detection_log.face_image_path)
-#         if img is None:
-#             raise HTTPException(status_code=500, detail=f"Failed to read image file from: {detection_log.face_image_path}")
-        
-#         # Add to vector database
-#         result = vectorDatabase(img, request.name_front)
-        
-#         # Update the person name
-#         detection_log.person = request.name_front
-#         db.commit()
-        
-#         return {
-#             "success": True,
-#             "message": f"Image added to vector database for {request.name_front}",
-#             "log_id": request.id,
-#             "corrected_person": request.name_front,
-#             "image_shape": img.shape,
-#             "detection_time": detection_log.detection_time.isoformat() if detection_log.detection_time else None
-#         }
-            
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         print(f"Error processing log ID {request.id}: {e}")
-#         import traceback
-#         traceback.print_exc()
-#         raise HTTPException(status_code=500, detail=str(e))
-    
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -796,95 +725,3 @@ async def global_exception_handler(request, exc):
 
 
  
-
-
-# @app.get("/qd-remove")
-# async def qd_remove(
-#     # request: SaveRequest,
-#     # db: Session = Depends(get_db)
-# ):
-#     # print('id', request.id)
-#     # # name_to_ai = dictionary.get(request.name_front)
-#     # name_to_ai = request.name_front
-#     try:
-#         name_to_ai = ['0311344119']
-#         result = removeDatabase(name_to_ai)
-   
-#         return {
-#             "success": True,
-#             "message": f"Image added to vector database for {name_to_ai}",
-#             # "log_id": request.id,
-#             "corrected_person": name_to_ai,
-#             "vector_database_result": result if result else "Success",
-#         }
-            
-#     except Exception as e:
-#         # print(f"Error processing log ID {request.id}: {e}")
-#         import traceback
-#         traceback.print_exc()
-#         return {"error": str(e)}
-#     finally:
-#         print('Processing complete')
-    
-    
-    
-    
-
-
-
-# Extracted_frame_path = Path("saved_media")
-# @app.post("/extract-video-frames")
-# async def extract_video_frames(file: UploadFile = File(...)):
-    
-#     # Validate file type
-#     if not file.filename.endswith(".mp4"):
-#         raise HTTPException(status_code=400, detail="Only mp4 files are accepted")
-
-#     try:
-#         contents = await file.read()
-#         print(f"📦 File size: {len(contents)} bytes")
-
-#         # Save to a temporary file (OpenCV needs a file path)
-#         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-#             tmp.write(contents)
-#             tmp_path = tmp.name
-
-#         cap = cv2.VideoCapture(tmp_path)
-
-#         if not cap.isOpened():
-#             raise HTTPException(status_code=400, detail="Could not open video")
-
-#         frame_count = 0
-#         saved_frames = []
-
-#         daily_dir = Extracted_frame_path / Path(file.filename).stem
-#         while True:
-#             ret, frame = cap.read()
-#             if not ret:
-#                 break
-
-#             # Example: save every 30th frame
-#             if frame_count % 1 == 0:
-#                 daily_dir.mkdir(exist_ok=True, parents=True)
-#                 frame_name = f"frame_{frame_count}.jpg"
-#                 frame_name = str(Extracted_frame_path / Path(file.filename).stem ) +'/'+ frame_name
-#                 cv2.imwrite(frame_name, frame)
-#                 saved_frames.append(frame_name)
-
-#             frame_count += 1
-
-#         cap.release()
-#         os.remove(tmp_path)
-
-#         return {
-#             "total_frames_processed": frame_count,
-#             "frames_saved": len(saved_frames),
-#             "frame_files": saved_frames
-#         }
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-    
-
-
-

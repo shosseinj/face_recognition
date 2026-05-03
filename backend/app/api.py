@@ -40,21 +40,16 @@ from .routers import personnel
 #increamental images
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import  Optional
 import os
 import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
-# from Detection.TensorRT.infer import vectorDatabase
-from Face_ai.main import FaceEmbedding, DeletePointVD, FaceEmbeddingWithoutDetection, FaceCropping
 import cv2
-import numpy as np
 
 
-from io import BytesIO
-import zipfile
-import tempfile
+
 
 
 
