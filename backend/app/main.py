@@ -411,10 +411,13 @@ async def send_hossein():
                 else:
                     full_name = person_value
             if log.area:
-                full_name = full_name + ' - '+ log.area
+                area =  log.area
+            else:
+                area = 'بدون ناحیه'
             
             logs_data.append({
                 "id": log.id,
+                "area": area,
                 "person": log.person,  # National code
                 "full_name": full_name,  # Full name if found, else None
                 "confidence": float(log.confidence) if log.confidence is not None else 0.0,
