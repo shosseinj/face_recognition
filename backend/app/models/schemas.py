@@ -102,7 +102,7 @@ class Personnel(BaseModel):
     created_at: datetime
     rooms: List[RoomResponse] = []  # Add rooms field
     primary_image: Optional[str]
-    
+    last_seen : Optional[datetime]
     class Config:
         from_attributes = True
 

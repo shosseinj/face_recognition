@@ -28,6 +28,7 @@ from ..models.db_functions import (
     delete_personnel_image
 )
 from sqlalchemy import text
+from sqlalchemy import func
 
 from ..models.schemas import Personnel as PersonnelSchema, PersonnelWithImages, PersonnelCreate, PersonnelUpdate, PersonnelImageResponse, PersonnelImageResponse, RoomResponse
 router = APIRouter(prefix="/personnel", tags=["personnel"])
@@ -457,20 +458,33 @@ def get_logs_summary(
 @router.get("/{personnel_id}", response_model=PersonnelSchema)
 def read_personnel_by_id(
     personnel_id: int,
-    include_rooms: bool = Query(True),
+    include_rooms: bool = Query(True, description="Include room information"),
     db: Session = Depends(get_db)
 ):
-    """Get personnel by ID with their rooms"""
+    """Get personnel by ID with their rooms and last seen time"""
+    
+    # Build query
     query = db.query(PersonnelDB)
     
     if include_rooms:
         query = query.options(joinedload(PersonnelDB.rooms))
     
+    # Get personnel
     db_personnel = query.filter(PersonnelDB.id == personnel_id).first()
     
     if db_personnel is None:
         raise HTTPException(status_code=404, detail="Personnel not found")
+    
+    # Get last seen time
+    last_seen = db.query(func.max(DetectionLog.detection_time)).filter(
+        DetectionLog.person == db_personnel.national_code
+    ).scalar()
+    
+    # Add last_seen attribute to the personnel object
+    db_personnel.last_seen = last_seen
+    
     return db_personnel
+
 
 
 
@@ -823,7 +837,6 @@ def get_personnel_logs_summary(
     db: Session = Depends(get_db)
 ):
     """Get summary statistics of detection logs for a specific personnel"""
-    from sqlalchemy import func
     
     personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if not personnel:
