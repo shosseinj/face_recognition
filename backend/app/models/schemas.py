@@ -138,7 +138,7 @@ class PersonnelWithImages(BaseModel):
     created_at: Optional[datetime] = None
     rooms: List[RoomResponse] = []  # Include rooms
     images: List[PersonnelImageResponse] = []
-    primary_image_base64: Optional[str] = None  # ADD THIS FIELD
+    primary_image: Optional[str] = None  # ADD THIS FIELD
     
     class Config:
         from_attributes = True

@@ -53,6 +53,7 @@ from ..models.database import DetectionLog, Personnel as PersonnelDB, PersonnelI
 from ..models.db_functions import get_db
 import numpy as np
 import zipfile
+from backend.app.utils import convert_image_to_base64
 
 from Face_ai.main import ModelManager
 model_mgr = ModelManager()
@@ -370,7 +371,7 @@ async def import_personnel_excel(
 
 
 
-@router.post("/", response_model=PersonnelSchema, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=PersonnelCreate, status_code=status.HTTP_201_CREATED)
 def create_personnel(personnel: PersonnelCreate, db: Session = Depends(get_db)):
     # Check if national code already exists
     existing = db.query(PersonnelDB).filter(PersonnelDB.national_code == personnel.national_code).first()
@@ -455,6 +456,49 @@ def get_logs_summary(
     }
 
 
+
+@router.get("/images", response_model=List[PersonnelImageResponse])
+async def get_all_images(
+    request: Request,
+    skip: int = 0,
+    limit: int = 100,
+    personnel_id: Optional[int] = None,  # Optional filter by personnel
+    db: Session = Depends(get_db)
+):
+    """
+    Get all images with optional filtering
+    - skip: Number of records to skip (pagination)
+    - limit: Maximum number of records to return
+    - personnel_id: Filter by specific personnel (optional)
+    """
+    query = db.query(PersonnelImage)
+    
+    # Apply filter if personnel_id is provided
+    if personnel_id:
+        query = query.filter(PersonnelImage.personnel_id == personnel_id)
+    
+    # Get images with pagination
+    images = query.order_by(PersonnelImage.id.desc()).offset(skip).limit(limit).all()
+    
+    # Generate URLs
+    base_url = str(request.base_url).rstrip('/')
+    result = []
+    
+    for img in images:
+        result.append(
+            PersonnelImageResponse(
+                id=img.id,
+                image_base64=convert_image_to_base64(img.image_url),
+                personnel_id=img.personnel_id,
+                is_primary=img.is_primary if hasattr(img, 'is_primary') else False,  # Add this line
+                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
+            )
+        )
+    
+    return result
+
+
+
 @router.get("/{personnel_id}", response_model=PersonnelSchema)
 def read_personnel_by_id(
     personnel_id: int,
@@ -495,7 +539,7 @@ def read_personnel_by_id(
 #         raise HTTPException(status_code=404, detail="Personnel not found")
 #     return db_personnel
 
-@router.put("/{personnel_id}", response_model=PersonnelSchema)
+@router.put("/{personnel_id}", response_model=PersonnelCreate)
 def update_personnel(personnel_id: int, personnel_update: PersonnelUpdate, db: Session = Depends(get_db)):
     db_personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if db_personnel is None:
@@ -607,10 +651,10 @@ async def get_personnel_with_images(
     Get personnel details along with all their images and rooms
     """
     # Get personnel with images and rooms (eager loading)
-    personnel = db.query(Personnel)\
-        .options(joinedload(Personnel.images))\
-        .options(joinedload(Personnel.rooms))\
-        .filter(Personnel.id == personnel_id)\
+    personnel = db.query(PersonnelDB)\
+        .options(joinedload(PersonnelDB.images))\
+        .options(joinedload(PersonnelDB.rooms))\
+        .filter(PersonnelDB.id == personnel_id)\
         .first()
 
     if not personnel:
@@ -624,7 +668,7 @@ async def get_personnel_with_images(
         images_response.append(
             PersonnelImageResponse(
                 id=img.id,
-                image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
+                image_base64=convert_image_to_base64(img.image_url),
                 personnel_id=img.personnel_id,
                 uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
             )
@@ -995,7 +1039,7 @@ async def add_images_to_personnel(
         for img in all_images_db:
             image_response = PersonnelImageResponse(
                 id=img.id,
-                image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
+                image_base64=img.image_base64,  # Convert to base64
                 personnel_id=img.personnel_id,
                 is_primary=img.is_primary,  # ADD is_primary
                 uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
@@ -1003,11 +1047,11 @@ async def add_images_to_personnel(
             all_images.append(image_response)
             
             if img.is_primary:
-                primary_image_url = image_response.image_url
+                primary_image_url = image_response.image_base64
         
         # If no primary image set and there are images, set first as primary
         if not primary_image_url and all_images:
-            primary_image_url = all_images[0].image_url
+            primary_image_url = all_images[0].image_base64
         
         return PersonnelWithImages(
             id=personnel.id,
@@ -1142,7 +1186,7 @@ async def create_personnel_with_images(
             images_response.append(
                 PersonnelImageResponse(
                     id=img.id,
-                    image_url=f"{base_url}/api/v1/personnel/{db_personnel.id}/images/{img.id}/file",
+                    image_base64=convert_image_to_base64(img.image_url),
                     personnel_id=img.personnel_id,
                     uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
                 )
@@ -1173,6 +1217,12 @@ async def create_personnel_with_images(
 
 
 
+
+from typing import Optional
+
+
+
+
 @router.get("/{personnel_id}/images", response_model=List[PersonnelImageResponse])
 async def get_personnel_images(
     personnel_id: int,
@@ -1199,13 +1249,17 @@ async def get_personnel_images(
         result.append(
             PersonnelImageResponse(
                 id=img.id,
-                image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
+                image_base64=convert_image_to_base64(img.image_url),  # Direct file path
                 personnel_id=img.personnel_id,
-                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
+                is_primary=img.is_primary,
+                uploaded_at=img.uploaded_at
             )
         )
     
     return result
+
+
+
 
 
 
@@ -1250,48 +1304,6 @@ async def get_personnel_with_images(
         images=images_response
     )
 
-
-
-from typing import Optional
-
-@router.get("/images", response_model=List[PersonnelImageResponse])
-async def get_all_images(
-    request: Request,
-    skip: int = 0,
-    limit: int = 100,
-    personnel_id: Optional[int] = None,  # Optional filter by personnel
-    db: Session = Depends(get_db)
-):
-    """
-    Get all images with optional filtering
-    - skip: Number of records to skip (pagination)
-    - limit: Maximum number of records to return
-    - personnel_id: Filter by specific personnel (optional)
-    """
-    query = db.query(PersonnelImage)
-    
-    # Apply filter if personnel_id is provided
-    if personnel_id:
-        query = query.filter(PersonnelImage.personnel_id == personnel_id)
-    
-    # Get images with pagination
-    images = query.order_by(PersonnelImage.id.desc()).offset(skip).limit(limit).all()
-    
-    # Generate URLs
-    base_url = str(request.base_url).rstrip('/')
-    result = []
-    
-    for img in images:
-        result.append(
-            PersonnelImageResponse(
-                id=img.id,
-                image_url=f"{base_url}/api/v1/personnel/{img.personnel_id}/images/{img.id}/file",
-                personnel_id=img.personnel_id,
-                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
-            )
-        )
-    
-    return result
 
 
 
@@ -1441,7 +1453,7 @@ async def create_personnel_from_multiple_logs(
         base_url = str(request.base_url).rstrip("/")
         image_response = PersonnelImageResponse(
             id=db_image.id,
-            image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{db_image.id}/file",
+            image_base64=convert_image_to_base64(img.image_url),  # Convert to base64
             personnel_id=personnel_id,
             uploaded_at=db_image.uploaded_at
         )

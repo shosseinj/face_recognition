@@ -13,6 +13,7 @@ import uuid
 from ..video_utils import save_video_with_ffmpeg, save_fallback_opencv
 import asyncio
 from typing import Optional
+import base64
 # ==================== CONFIGURATION ====================
 FACE_STORAGE_DIR = Path("saved_media")
 FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
@@ -182,3 +183,15 @@ class PersonnelImage(Base):
     uploaded_at = Column(DateTime, default=datetime.now)
     
     personnel = relationship("Personnel", back_populates="images")
+
+    @property
+    def image_base64(self) -> str:
+        """Convert image file to base64 string"""
+        if not self.image_url:
+            return ""
+        try:
+            with open(self.image_url, 'rb') as image_file:
+                return base64.b64encode(image_file.read()).decode('utf-8')
+        except Exception:
+            return ""
+        
