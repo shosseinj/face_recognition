@@ -86,6 +86,83 @@ def get_logs(
     return result
 
 
+@router.get("/reports/daily")
+def get_daily_report(
+    date: datetime = Query(..., description="Date for report (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Daily report: list of detected personnel with:
+    - number of detections
+    - first seen time
+    - last seen time  
+    - total presence (minutes/hours)
+    """
+    from sqlalchemy import func
+    
+    # Set date range
+    start_of_day = datetime.combine(date.date(), datetime.min.time())
+    end_of_day = datetime.combine(date.date(), datetime.max.time())
+    
+    # Get all personnel for name lookup
+    all_personnel = db.query(Personnel).all()
+    personnel_lookup = {p.national_code: p for p in all_personnel}
+    
+    # Get detections grouped by person
+    results = db.query(
+        DetectionLog.person,
+        func.count(DetectionLog.id).label('detection_count'),
+        func.min(DetectionLog.detection_time).label('first_seen'),
+        func.max(DetectionLog.detection_time).label('last_seen')
+    ).filter(
+        DetectionLog.detection_time >= start_of_day,
+        DetectionLog.detection_time <= end_of_day
+    ).group_by(DetectionLog.person).all()
+    
+    # Prepare response
+    report_data = []
+    
+    for result in results:
+        # Get personnel info
+        personnel = personnel_lookup.get(result.person)
+        
+        # Calculate presence duration
+        presence_seconds = (result.last_seen - result.first_seen).total_seconds()
+        presence_minutes = round(presence_seconds / 60, 1)
+        presence_hours = round(presence_seconds / 3600, 1)
+        
+        # Format duration
+        if presence_hours >= 1:
+            duration_str = f"{int(presence_hours)}h {int(presence_minutes % 60)}m"
+        else:
+            duration_str = f"{presence_minutes}m"
+        
+        report_data.append({
+            "person": {
+                "national_code": result.person,
+                "name": f"{personnel.fname} {personnel.lname}".strip() if personnel else "Unknown",
+                "department": personnel.department if personnel else None
+            },
+            "detection_count": result.detection_count,
+            "first_seen": result.first_seen,
+            "last_seen": result.last_seen,
+            "presence_duration": duration_str
+        })
+    
+    # Sort by detection count
+    report_data.sort(key=lambda x: x['detection_count'], reverse=True)
+    
+    return {
+        "date": date.date().isoformat(),
+        "summary": {
+            "total_personnel": len(report_data),
+            "total_detections": sum(item['detection_count'] for item in report_data)
+        },
+        "personnel": report_data
+    }
+
+
+
 @router.get("/{log_id}/video")
 async def get_detection_video(
     detection_id: int, 

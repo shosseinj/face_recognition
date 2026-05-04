@@ -159,7 +159,7 @@ class DetectionLog(Base):
     person = Column(String(200), nullable=False)
     area = Column(String(200), nullable=True)
     confidence = Column(Float, nullable=True)
-    detection_time = Column(DateTime, server_default=func.now())
+    detection_time = Column(DateTime, default=datetime.now)
     face_image_path = Column(String(512), nullable=True)
     video_path = Column(String(512), nullable=True)
     camera_id = Column(Integer, nullable=True)

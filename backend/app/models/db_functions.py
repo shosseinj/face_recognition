@@ -212,6 +212,26 @@ def save_detection(
                 print(f"✅ Video saved successfully: {video_path}")
 
         # Create detection log with access information
+        access_granted = None
+        if room_id and not('Unknown' in person):
+            # Your existing access check logic
+            personnel = db.query(Personnel).filter(
+                Personnel.fname == first_name,
+                Personnel.lname == last_name
+            ).first()
+            
+            if personnel:
+                # Check if personnel has access to this room
+                has_access = check_room_access(personnel.id, room_id, db)
+                access_granted = has_access  # True or False
+            else:
+                access_granted = False
+        elif 'Unknown' in person:
+            access_granted = False
+        else:
+            access_granted = None  # No room specified
+        
+        # Create detection log WITH access_granted
         detection = DetectionLog(
             person=person,
             confidence=float(confidence),
@@ -222,8 +242,11 @@ def save_detection(
             ref_img_id=ref_img_id, 
             area=area,
             room_id=room_id,
-            access_granted=access_granted,  # NEW
+            access_granted=access_granted  # ✅ Set the boolean field
         )
+
+
+
 
         db.add(detection)
         db.flush()
