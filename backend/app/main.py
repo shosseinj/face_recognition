@@ -589,7 +589,7 @@ async def process_frame(model,loaded_polygon_points, frame, cam_id, polygon_poin
                     for area in unique_areas:
                         if final_name == 'Unknown':
                             final_name = final_name +' #' + str(obj)
-                        log_id = save_detection_with_face(
+                        log_id = await save_detection_with_face(
                             person=final_name,
                             confidence=float(final_score),
                             face_image=final_face,
@@ -681,12 +681,12 @@ def save_disappeared_object(obj, history):
         end_idx = min(len(history["frames"]), best_idx + config.HALF_CLIP)
         frames_to_save = list(history["frames"])[start_idx:end_idx]
         
-        save_detection_with_face(
+        asyncio.run(save_detection_with_face(
             person=final_name,
             confidence=float(final_score),
             face_image=final_face,
             frames_to_save=frames_to_save
-        )
+        ))
 
 async def broadcast_frame(data: dict):
     """Broadcast frame and metadata using the manager"""

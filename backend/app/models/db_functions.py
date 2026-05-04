@@ -21,7 +21,7 @@ from typing import Optional
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 import base64
 
-
+import asyncio
 
 
 
@@ -36,9 +36,7 @@ def get_today_subdirectory(file_type) -> Path:
 
 # ==================== MAIN SAVE FUNCTION ====================
 
-
-
-def save_detection(
+async def save_detection(
     person: str, 
     area: str, 
     confidence: float, 
@@ -48,13 +46,10 @@ def save_detection(
     frames_to_save: list = None,  
     face_to_save: list = None,
     save_video: bool = False,
-    room_id: int = None,  # NEW parameter
-    db: Session = None  # NEW parameter for optional session
+    room_id: int = None,
+    db: Session = None
 ):
-    """Save a detection with optional face image, with 60-second cooldown per person.
-    If new detection has higher confidence, replace the old one.
-    Automatically determines if person has access to the room.
-    Returns: log_id if saved, None if skipped due to lower confidence or error"""
+    """Save a detection with optional face image, with 60-second cooldown per person."""
     
     close_db = False
     if db is None:
@@ -78,7 +73,6 @@ def save_detection(
         
         if recent_detection and not('Unknown' in person):
             if recent_detection.confidence >= confidence:
-                # Skip because existing detection is stronger
                 time_diff = (datetime.now() - recent_detection.detection_time).total_seconds()
                 print(f"⏱️  Skipping detection for '{person}' - last detection {time_diff:.1f}s ago with higher confidence ({recent_detection.confidence:.2f})")
                 if close_db:
@@ -110,25 +104,20 @@ def save_detection(
                 print(f"♻️  Replacing old detection for '{person}' with higher confidence {confidence:.2f}")
 
         # ==================== CHECK ROOM ACCESS ====================
-        # Determine if the person has access to the room (if room_id is provided)
         if room_id and not('Unknown' in person):
             from .database import Personnel, personnel_room_association
             
-            # Try to find personnel by first and last name
-            # Split person string (assumes format: "FirstName LastName")
             name_parts = person.split(' ', 1)
             if len(name_parts) >= 2:
                 first_name = name_parts[0]
                 last_name = name_parts[1]
                 
-                # Find personnel with matching name
                 personnel = db.query(Personnel).filter(
                     Personnel.fname == first_name,
                     Personnel.lname == last_name
                 ).first()
                 
                 if personnel:
-                    # Check if personnel has access to this room
                     access = db.query(personnel_room_association).filter(
                         personnel_room_association.c.personnel_id == personnel.id,
                         personnel_room_association.c.room_id == room_id
@@ -150,11 +139,9 @@ def save_detection(
             access_granted = False
             print(f"⚠️ Unknown person detected - access denied")
         else:
-            # No room specified, just logging detection
             access_granted = None
-          
 
-        # Save video if frames provided
+        # Save video if frames provided - NOW ASYNC
         if save_video and frames_to_save and len(frames_to_save) > 0:
             video_dir = get_today_subdirectory('video')
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -165,24 +152,27 @@ def save_detection(
             
             print(f"🎬 Saving video with {len(frames_to_save)} frames...")
             
-            success = save_video_with_ffmpeg(
+            # AWAIT the async function
+            success = await save_video_with_ffmpeg(
                 frames=frames_to_save,
                 output_path=video_path,
                 fps=20,
-                quality="medium",
+                quality="veryslow",
                 for_web=True
             )
             
             if not success:
                 print("⚠️ FFmpeg failed, trying OpenCV fallback...")
-                success = save_fallback_opencv(frames_to_save, video_path, fps=20)
+                # Use asyncio.to_thread for OpenCV fallback (CPU-bound)
+                success = await asyncio.to_thread(save_fallback_opencv, frames_to_save, video_path, 20)
             
             if not success:
                 print("❌ Failed to save video with both methods")
                 video_path = None
             else:
                 print(f"✅ Video saved successfully: {video_path}")
-                
+        
+        # Save face video if provided
         if face_to_save and len(face_to_save) > 0:
             video_dir = get_today_subdirectory('unknown_faces')
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -193,17 +183,18 @@ def save_detection(
             
             print(f"🎬 Saving video with {len(face_to_save)} frames...")
             
-            success = save_video_with_ffmpeg(
+            # AWAIT the async function
+            success = await save_video_with_ffmpeg(
                 frames=face_to_save,
                 output_path=video_path,
                 fps=20,
                 quality="veryslow",
-                for_web=False
+                for_web=True
             )
             
             if not success:
                 print("⚠️ FFmpeg failed, trying OpenCV fallback...")
-                success = save_fallback_opencv(face_to_save, video_path, fps=20)
+                success = await asyncio.to_thread(save_fallback_opencv, face_to_save, video_path, 20)
             
             if not success:
                 print("❌ Failed to save video with both methods")
@@ -211,27 +202,7 @@ def save_detection(
             else:
                 print(f"✅ Video saved successfully: {video_path}")
 
-        # Create detection log with access information
-        access_granted = None
-        if room_id and not('Unknown' in person):
-            # Your existing access check logic
-            personnel = db.query(Personnel).filter(
-                Personnel.fname == first_name,
-                Personnel.lname == last_name
-            ).first()
-            
-            if personnel:
-                # Check if personnel has access to this room
-                has_access = check_room_access(personnel.id, room_id, db)
-                access_granted = has_access  # True or False
-            else:
-                access_granted = False
-        elif 'Unknown' in person:
-            access_granted = False
-        else:
-            access_granted = None  # No room specified
-        
-        # Create detection log WITH access_granted
+        # Create detection log
         detection = DetectionLog(
             person=person,
             confidence=float(confidence),
@@ -242,17 +213,14 @@ def save_detection(
             ref_img_id=ref_img_id, 
             area=area,
             room_id=room_id,
-            access_granted=access_granted  # ✅ Set the boolean field
+            access_granted=access_granted
         )
-
-
-
 
         db.add(detection)
         db.flush()
         log_id = detection.id
         
-        # Save face image if provided
+        # Save face image if provided (use asyncio.to_thread for CPU-bound operation)
         if face_image is not None and face_image.size > 0:
             daily_dir = get_today_subdirectory('image')
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -262,13 +230,16 @@ def save_detection(
             filename = f"{safe_person}_{confidence_str}_{timestamp}_{unique_id}.jpg"
             face_path = str(daily_dir / filename)
             
-            cv2.imwrite(face_path, face_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            # Save image in thread pool
+            def save_face_image():
+                cv2.imwrite(face_path, face_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            
+            await asyncio.to_thread(save_face_image)
             detection.face_image_path = face_path
             print(f"✅ Face image saved: {face_path}")
         
         db.commit()
         
-        # Print access summary
         if room_id:
             status = "GRANTED" if access_granted else "DENIED"
             print(f"🔐 Access {status} for {person} to room {room_id} ")
@@ -281,7 +252,6 @@ def save_detection(
         import traceback
         traceback.print_exc()
         
-        # Clean up orphaned files
         if face_path and os.path.exists(face_path):
             try:
                 os.remove(face_path)
@@ -305,7 +275,7 @@ def save_detection(
 
 
 # ==================== WRAPPER FUNCTION ====================
-def save_detection_with_face(
+async def save_detection_with_face(
     person: str, 
     area: str, 
     confidence: float, 
@@ -322,7 +292,8 @@ def save_detection_with_face(
     Returns the saved log ID or None if failed/skipped
     """
     try:
-        log_id = save_detection(
+        # ADD AWAIT HERE
+        log_id = await save_detection(
             person=person,
             area=area,
             confidence=confidence, 
@@ -338,8 +309,6 @@ def save_detection_with_face(
     except Exception as e:
         print(f"❌ Failed to save detection for {person}: {e}")
         return None
-    
-    
 
 # ==================== DEPENDENCY ====================
 def get_db():
