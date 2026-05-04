@@ -133,7 +133,34 @@ class WebSocketManager:
             self.active_connections[camera_id].add(websocket)
             self.all_connections.add(websocket)
         print(f"✅ Client connected to camera '{camera_id}'. Total: {len(self.all_connections)}")
-    
+
+    async def broadcast_json(self, message: dict):
+        """Send JSON to all connected clients"""
+        if not self.active_connections:
+            return
+        
+        disconnected = []
+        async with self._lock:
+            # Collect all WebSocket connections from all camera groups
+            connections = []
+            for connections_set in self.active_connections.values():
+                connections.extend(list(connections_set))
+        
+        for connection in connections:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                print(f"Failed to send to client: {e}")
+                disconnected.append(connection)
+        
+        # Clean up dead connections
+        async with self._lock:
+            for conn in disconnected:
+                # Remove from all camera-specific sets
+                for camera_id in list(self.active_connections.keys()):
+                    self.active_connections[camera_id].discard(conn)
+                    if not self.active_connections[camera_id]:
+                        del self.active_connections[camera_id]     
     async def disconnect(self, websocket: WebSocket):
         async with self._lock:
             self.all_connections.discard(websocket)
@@ -512,7 +539,7 @@ async def process_frame(model,loaded_polygon_points, frame, cam_id, polygon_poin
 
     for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
         history = track_history[obj]
-        history["frames"].append(frame.copy())
+        history["frames"].append(frame)
         
         if person:
             history["ref_img_ids"].append(ref_img_id)
@@ -533,8 +560,8 @@ async def process_frame(model,loaded_polygon_points, frame, cam_id, polygon_poin
     
     for obj, count in list(try_objs.items()):
         if count > 70:
+            history = track_history[obj]
             if history["names"]:
-                history = track_history[obj]
                 name_counts = Counter(history["names"])
                 final_name, count = name_counts.most_common(1)[0]
 
@@ -613,9 +640,15 @@ async def video_broadcaster():
    
     try_objs = {}
     sources = [
-    {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
+    # {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
+    # {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": './video6.mp4'},
     {"type": "cv2", "src": 0},
+    # {"type": "cv2", "src": 0},
+    # {"type": "cv2", "src": 0},
+    # {"type": "cv2", "src": 0},
+    # {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
+    # {"type": "cv2", "src": 0},
     # {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
