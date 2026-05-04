@@ -17,7 +17,9 @@ FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
 from .database import DetectionLog, Personnel, PersonnelImage, Room, personnel_room_association
 # from sqlalchemy.orm import sessionmaker
 from .database import engine
+from typing import Optional
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+import base64
 
 
 
@@ -757,3 +759,57 @@ def check_room_access(personnel_id: int, room_id: int, db: Session = None):
         if close_db:
             db.close()
 
+
+
+def get_primary_image_url(personnel_id: int, db: Session = None) -> Optional[str]:
+    """Get the primary image URL for a personnel"""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    
+    try:
+        primary_image = db.query(PersonnelImage).filter(
+            PersonnelImage.personnel_id == personnel_id,
+            PersonnelImage.is_primary == True
+        ).first()
+        
+        if primary_image:
+            return primary_image.image_url
+        
+        # If no primary image, return the first image
+        first_image = db.query(PersonnelImage).filter(
+            PersonnelImage.personnel_id == personnel_id
+        ).first()
+        
+        return first_image.image_url if first_image else None
+        
+    finally:
+        if close_db:
+            db.close()
+
+
+
+def image_to_base64(image_path: str) -> Optional[str]:
+    """Convert image file to base64 string"""
+    try:
+        if not os.path.exists(image_path):
+            return None
+        
+        with open(image_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+        
+        # Detect image type for data URL prefix
+        file_extension = os.path.splitext(image_path)[1].lower()
+        mime_type = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.bmp': 'image/bmp'
+        }.get(file_extension, 'image/jpeg')
+        
+        return f"data:{mime_type};base64,{encoded_string}"
+    except Exception as e:
+        print(f"Error converting image to base64: {e}")
+        return None

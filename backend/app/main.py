@@ -643,13 +643,13 @@ async def video_broadcaster():
     # {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
     # {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": './video6.mp4'},
-    {"type": "cv2", "src": 0},
+    # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
     # {"type": "cv2", "src": 0},
-    # {"type": "rtsp", "src": config.RTSP_URL}
+    {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
     model = ModelManager()

@@ -43,7 +43,7 @@ from datetime import datetime
 from typing import Optional
 # from .detections import get_face_image_url, get_video_url
 from ..utils import get_face_image_url, get_video_url
-# from Face_ai.main import  DeletePointVD, model_mgr.FaceEmbeddingWithoutDetection,  model_mgr.FaceEmbeddingCropping
+# from Face_ai.main import DeletePointVD, FaceEmbeddingWithoutDetection,  FaceEmbeddingCropping
 from ..models.schemas import (
     DetectionLogCreate, DetectionLogResponse, 
     PersonnelImageCreate, PersonnelImageResponse, PersonnelWithImages, PersonnelFromLogsRequest
@@ -391,21 +391,32 @@ def create_personnel(personnel: PersonnelCreate, db: Session = Depends(get_db)):
     return db_personnel
 
     
-@router.get("/", response_model=List[PersonnelSchema])
-def read_personnel(
+@router.get("/", response_model=List[PersonnelWithImages])
+def get_all_personnel(
     skip: int = 0, 
-    limit: int = 100,
-    include_rooms: bool = Query(True),
+    limit: int = 100, 
     db: Session = Depends(get_db)
 ):
-    """Get all personnel with their rooms"""
-    query = db.query(PersonnelDB)
+    personnel_list = db.query(PersonnelDB).offset(skip).limit(limit).all()
     
-    if include_rooms:
-        query = query.options(joinedload(PersonnelDB.rooms))
+    # Batch load primary images for all personnel
+    personnel_ids = [p.id for p in personnel_list]
+    primary_images = db.query(PersonnelImage).filter(
+        PersonnelImage.personnel_id.in_(personnel_ids),
+        PersonnelImage.is_primary == True
+    ).all()
     
-    personnel = query.order_by(PersonnelDB.id).offset(skip).limit(limit).all()
-    return personnel
+    # Create mapping
+    primary_image_map = {img.personnel_id: img.image_url for img in primary_images}
+    
+    # Build responses
+    responses = []
+    for personnel in personnel_list:
+        response = PersonnelWithImages.model_validate(personnel)
+        response.primary_image = primary_image_map.get(personnel.id)
+        responses.append(response)
+    
+    return responses
 
 
 
@@ -847,19 +858,19 @@ def get_personnel_logs_summary(
 
 
 
-#add image to an existing personnel
-@router.post("/{personnel_id}/with-images", response_model=PersonnelWithImages, status_code=status.HTTP_201_CREATED)
+@router.post("/{personnel_id}/images", response_model=PersonnelWithImages, status_code=status.HTTP_201_CREATED)
 async def add_images_to_personnel(
     request: Request,
     personnel_id: int,
     images: List[UploadFile] = File(...),
+    is_primary: Optional[bool] = Form(False),  # ADD is_primary parameter
     db: Session = Depends(get_db)
 ):
     """
     Add multiple images to an existing personnel
     """
     # Check if personnel exists
-    personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if not personnel:
         raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
     
@@ -869,6 +880,8 @@ async def add_images_to_personnel(
     
     # Validate file types
     allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+    processed_images = []
+    
     for image in images:
         file_extension = os.path.splitext(image.filename)[1].lower()
         if file_extension not in allowed_extensions:
@@ -877,18 +890,19 @@ async def add_images_to_personnel(
                 detail=f"نوع داده غیر مجاز! '{image.filename}' انواع داده مجاز: {', '.join(allowed_extensions)}"
             )
         
-        # Read and validate image for vector database
+        # Read and validate image
         contents = await image.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None:
             raise HTTPException(status_code=400, detail=f"Could not read image: {image.filename}")
         
-        # Add to vector database (will be updated with ref_img_id after DB record creation)
-        # We'll store the image data for later use with ref_img_id
-        image.img_data = img
-        image.contents = contents
-        await image.seek(0)
+        processed_images.append({
+            'file': image,
+            'filename': image.filename,
+            'contents': contents,
+            'img': img
+        })
     
     try:
         # Create personnel images directory
@@ -898,11 +912,11 @@ async def add_images_to_personnel(
         saved_images = []
         
         # Save each image and create database records
-        for image in images:
+        for idx, img_data in enumerate(processed_images):
             # Generate unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_id = str(uuid.uuid4())[:8]
-            file_extension = os.path.splitext(image.filename)[1].lower()
+            file_extension = os.path.splitext(img_data['filename'])[1].lower()
             safe_filename = f"{personnel.fname}_{personnel.lname}_{timestamp}_{unique_id}{file_extension}"
             safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
             
@@ -910,23 +924,38 @@ async def add_images_to_personnel(
             file_path = personnel_images_dir / safe_filename
             
             with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(image.file, buffer)
+                buffer.write(img_data['contents'])  # Use stored contents instead of seeking
+            
+            # Determine if this should be primary
+            is_primary_img = is_primary and idx == 0  # Only first image if is_primary=True
+            
+            # If setting as primary, unset other primary flags
+            if is_primary_img:
+                db.query(PersonnelImage).filter(
+                    PersonnelImage.personnel_id == personnel_id,
+                    PersonnelImage.is_primary == True
+                ).update({PersonnelImage.is_primary: False})
             
             # Create database record for image
             db_image = PersonnelImage(
                 image_url=str(file_path),
-                personnel_id=personnel_id
+                personnel_id=personnel_id,
+                is_primary=is_primary_img  # ADD is_primary
             )
             
             db.add(db_image)
             db.flush()  # Get ID for this image
             
-            # Now add to vector database with ref_img_id
+            # Add to vector database with ref_img_id
             try:
-                # Use the stored image data
-                model_mgr.FaceEmbeddingWithoutDetection(image.img_data, personnel.national_code, ref_img_id=db_image.id)
-
-                print(f"imgae data {image.img_data}, national code {personnel.national_code}, ref img id {db_image.id}")
+                # Make sure model_mgr is imported/available
+                
+                # from .model_manager import model_mgr  # Adjust import as needed
+                model_mgr.FaceEmbeddingWithoutDetection(
+                    img_data['img'], 
+                    personnel.national_code, 
+                    ref_img_id=db_image.id
+                )
                 print(f"✅ Added to vector DB with ref_img_id: {db_image.id}")
             except Exception as e:
                 print(f"⚠️ Warning: Vector DB insertion failed for image {db_image.id}: {e}")
@@ -940,24 +969,32 @@ async def add_images_to_personnel(
         # Refresh to get updated relationships
         db.refresh(personnel)
         
-        # Generate URLs for all images (including existing ones)
+        # Generate URLs for all images
         base_url = str(request.base_url).rstrip('/')
         all_images = []
+        primary_image_url = None
         
         # Get all images for this personnel (both existing and new)
         all_images_db = db.query(PersonnelImage).filter(
             PersonnelImage.personnel_id == personnel_id
-        ).order_by(PersonnelImage.id.desc()).all()
+        ).order_by(PersonnelImage.is_primary.desc(), PersonnelImage.id.desc()).all()
         
         for img in all_images_db:
-            all_images.append(
-                PersonnelImageResponse(
-                    id=img.id,
-                    image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
-                    personnel_id=img.personnel_id,
-                    uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
-                )
+            image_response = PersonnelImageResponse(
+                id=img.id,
+                image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
+                personnel_id=img.personnel_id,
+                is_primary=img.is_primary,  # ADD is_primary
+                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
             )
+            all_images.append(image_response)
+            
+            if img.is_primary:
+                primary_image_url = image_response.image_url
+        
+        # If no primary image set and there are images, set first as primary
+        if not primary_image_url and all_images:
+            primary_image_url = all_images[0].image_url
         
         return PersonnelWithImages(
             id=personnel.id,
@@ -967,7 +1004,9 @@ async def add_images_to_personnel(
             staff=personnel.staff,
             department=personnel.department,
             created_at=personnel.created_at,
-            images=all_images
+            rooms=[],  # Add rooms if needed
+            images=all_images,
+            primary_image=primary_image_url  # ADD primary_image
         )
         
     except Exception as e:
@@ -976,17 +1015,18 @@ async def add_images_to_personnel(
         
         # Clean up any saved files for this batch
         if 'personnel_images_dir' in locals() and personnel_images_dir.exists():
-            # Only delete the files we just created (optional)
-            for image in saved_images:
+            for img in saved_images:
                 try:
-                    Path(image.image_url).unlink()
+                    if hasattr(img, 'image_url') and Path(img.image_url).exists():
+                        Path(img.image_url).unlink()
                 except:
                     pass
         
         print(f"Error adding images to personnel: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to add images: {str(e)}")
-
-
+    
 
 
 

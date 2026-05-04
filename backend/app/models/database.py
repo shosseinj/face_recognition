@@ -12,6 +12,7 @@ from pathlib import Path
 import uuid
 from ..video_utils import save_video_with_ffmpeg, save_fallback_opencv
 import asyncio
+from typing import Optional
 # ==================== CONFIGURATION ====================
 FACE_STORAGE_DIR = Path("saved_media")
 FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
@@ -117,6 +118,16 @@ class Personnel(Base):
     )
     rooms = relationship("Room", secondary=personnel_room_association, back_populates="personnel")
 
+    @property
+    def primary_image(self) -> Optional[str]:
+        """Get the primary image URL"""
+        primary = next((img for img in self.images if img.is_primary), None)
+        if primary:
+            return primary.image_url
+        # Return first image if exists
+        return self.images[0].image_url if self.images else None
+    
+    
 class Room(Base):
     __tablename__ = "Rooms"
     
@@ -156,8 +167,6 @@ class DetectionLog(Base):
     created_at = Column(DateTime, default=datetime.now)
     room_id = Column(Integer, ForeignKey('Rooms.id'), nullable=True)
     access_granted = Column(Boolean, nullable=True)  # ADD THIS FIELD
-
-    
     room = relationship("Room")
 
             

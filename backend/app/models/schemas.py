@@ -101,6 +101,7 @@ class Personnel(BaseModel):
     department: Optional[str] = None
     created_at: datetime
     rooms: List[RoomResponse] = []  # Add rooms field
+    primary_image: Optional[str]
     
     class Config:
         from_attributes = True
@@ -110,12 +111,16 @@ class Personnel(BaseModel):
 class PersonnelImageBase(BaseModel):
     image_url: str
     personnel_id: int
+    is_primary: Optional[bool] = False  # ADD THIS
 
 class PersonnelImageCreate(PersonnelImageBase):
     pass
 
-class PersonnelImageResponse(PersonnelImageBase):
+class PersonnelImageResponse(BaseModel):
     id: int
+    image_base64: str  # Changed from image_url to image_base64
+    personnel_id: int
+    is_primary: Optional[bool] = False
     uploaded_at: Optional[datetime] = None
     
     class Config:
@@ -133,6 +138,7 @@ class PersonnelWithImages(BaseModel):
     created_at: Optional[datetime] = None
     rooms: List[RoomResponse] = []  # Include rooms
     images: List[PersonnelImageResponse] = []
+    primary_image_base64: Optional[str] = None  # ADD THIS FIELD
     
     class Config:
         from_attributes = True
