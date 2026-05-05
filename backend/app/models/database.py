@@ -165,7 +165,7 @@ class DetectionLog(Base):
     video_path = Column(String(512), nullable=True)
     camera_id = Column(Integer, nullable=True)
     # created_at = Column(DateTime, server_default=func.now())
-    created_at = Column(DateTime, default=datetime.now)
+    # created_at = Column(DateTime, default=datetime.now)
     room_id = Column(Integer, ForeignKey('Rooms.id'), nullable=True)
     access_granted = Column(Boolean, nullable=False, default=True)
     room = relationship("Room")

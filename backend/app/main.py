@@ -50,7 +50,6 @@ from io import BytesIO  # IMPORT THIS!
 # from Face_ai.main import FrameProcessing, FaceEmbedding, FaceEmbeddingCropping
 from Face_ai.main import ModelManager
 
-
 processor_task = None
 BASE_DIR = Path(__file__).resolve().parent  # This points to backend/app/
 STATIC_DIR = BASE_DIR / "static"
@@ -647,7 +646,7 @@ async def video_broadcaster():
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
-    # {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
+    {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
     # {"type": "cv2", "src": 0},
     {"type": "rtsp", "src": config.RTSP_URL}
 ]

@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import os
 from ..models.database import DetectionLog, Personnel
 from ..models.db_functions import get_db
-from ..models.schemas import DetectionLogResponse
+from ..models.schemas import DetectionLogResponse, DetectionLogCreate
 from fastapi import Query
 from ..utils import get_face_image_url, get_video_url
 # Changed prefix from "/detections" to "/logs"
@@ -27,6 +27,41 @@ from typing import Optional
 #     return f"{base_url}/api/v1/logs/{detection_id}/video"
 
 from typing import Optional
+
+
+
+
+
+# Existing endpoints
+@router.post("/log", response_model=DetectionLogResponse)
+def log_detection(
+    request: Request,
+    person_data: DetectionLogCreate, 
+    db: Session = Depends(get_db)
+):
+    """Log a face detection"""
+    db_log = DetectionLog(
+        person=person_data.person,
+        confidence=person_data.confidence,
+        face_image_path=person_data.face_image_path if hasattr(person_data, 'face_image_path') else None,
+        detection_time=datetime.now()
+    )
+    db.add(db_log)
+    db.commit()
+    db.refresh(db_log)
+    
+    return DetectionLogResponse(
+        id=db_log.id,
+        person=db_log.person,
+        confidence=float(db_log.confidence) if db_log.confidence else None,
+        detection_time=db_log.detection_time,
+        face_image_url=get_face_image_url(request, db_log.id) if db_log.face_image_path else None,
+        video_url=get_video_url(request, db_log.id) if db_log.video_path else None
+    )
+
+
+
+
 
 @router.get("/", response_model=List[DetectionLogResponse])
 def get_logs(

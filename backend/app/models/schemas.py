@@ -36,12 +36,30 @@ class RoomResponse(RoomBase):
 
 
 # ==================== DETECTION LOG SCHEMAS ====================
+# class DetectionLogCreate(BaseModel):
+#     person: str
+#     confidence: Optional[float] = None
+#     ref_img_id: Optional[int] = None
+#     face_image_path: Optional[str] = None
+
+
 class DetectionLogCreate(BaseModel):
     person: str
     confidence: Optional[float] = None
     ref_img_id: Optional[int] = None
     face_image_path: Optional[str] = None
+    
+    # Additional fields you might want to add:
+    detection_time: Optional[datetime] = None  # Allow custom time, defaults to now()
+    room_id: Optional[int] = None
+    access_granted: Optional[bool] = None
+    video_url: Optional[str] = None
+    camera_id: Optional[int] = None  # If you have multiple cameras
+    
+    class Config:
+        from_attributes = True
 
+        
 class LogSummaryResponse(BaseModel):
     total_detections: int
     unique_personnel: int
@@ -103,6 +121,7 @@ class Personnel(BaseModel):
     rooms: List[RoomResponse] = []  # Add rooms field
     primary_image: Optional[str]
     last_seen : Optional[datetime]
+    primary_image_base64: Optional[str] = None  # ADD THIS LINE
     class Config:
         from_attributes = True
 

@@ -77,32 +77,6 @@ router.include_router(rooms.router)
 
 
 
-# Existing endpoints
-@router.post("/log", response_model=DetectionLogResponse)
-def log_detection(
-    request: Request,
-    person_data: DetectionLogCreate, 
-    db: Session = Depends(get_db)
-):
-    """Log a face detection"""
-    db_log = DetectionLog(
-        person=person_data.person,
-        confidence=person_data.confidence,
-        face_image_path=person_data.face_image_path if hasattr(person_data, 'face_image_path') else None,
-        detection_time=datetime.now()
-    )
-    db.add(db_log)
-    db.commit()
-    db.refresh(db_log)
-    
-    return DetectionLogResponse(
-        id=db_log.id,
-        person=db_log.person,
-        confidence=float(db_log.confidence) if db_log.confidence else None,
-        detection_time=db_log.detection_time,
-        face_image_url=get_face_image_url(request, db_log.id) if db_log.face_image_path else None,
-        video_url=get_video_url(request, db_log.id) if db_log.video_path else None
-    )
 
 
 
@@ -192,7 +166,7 @@ def log_detection(
 
 
 
-@router.get("/detections/{detection_id}/extract-frames")
+@router.get("/extract-frames/{detection_id}/")
 async def extract_frames_from_detection_video(
     detection_id: int,
     frame_interval: int = Query(30, description="Extract every Nth frame"),
