@@ -30,7 +30,7 @@ import shutil
 from pathlib import Path
 import uuid
 from .routers import personnel, detections, rooms
-from .models.database import DetectionLog, Personnel, PersonnelImage, FACE_STORAGE_DIR
+from .models.database import DetectionLog, Personnel as PersonnelDB, PersonnelImage, FACE_STORAGE_DIR, Room
 from .models.db_functions import get_db
 from .models.schemas import (
     DetectionLogCreate, DetectionLogResponse, 
@@ -47,7 +47,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 import cv2
-
+from backend.app.utils import convert_image_to_base64, get_face_image_url, get_video_url
 
 
 
@@ -158,6 +158,139 @@ router.include_router(rooms.router)
 #     return results
 
    
+@router.get("/home")
+def get_home_data(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Single endpoint for home page - returns all necessary data using existing schemas
+    """
+    from sqlalchemy import func
+    
+    now = datetime.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    month_start = now - timedelta(days=30)
+    
+    # ==================== PERSONNEL SUMMARY ====================
+    # Total counts
+    total_personnel = db.query(func.count(PersonnelDB.id)).scalar() or 0
+    total_staff = db.query(func.count(PersonnelDB.id)).filter(PersonnelDB.staff == True).scalar() or 0
+    
+    # Latest 5 personnel added
+    latest_personnel = db.query(PersonnelDB).order_by(
+        PersonnelDB.created_at.desc()
+    ).limit(5).all()
+    
+    # Create personnel list with primary images
+    latest_personnel_list = []
+    for p in latest_personnel:
+        primary_image = db.query(PersonnelImage).filter(
+            PersonnelImage.personnel_id == p.id,
+            PersonnelImage.is_primary == True
+        ).first()
+        
+        p_data = {
+            "id": p.id,
+            "fname": p.fname,
+            "lname": p.lname,
+            "national_code": p.national_code,
+            "staff": p.staff,
+            "department": p.department,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "primary_image": convert_image_to_base64(primary_image.image_url) if primary_image else None
+        }
+        latest_personnel_list.append(p_data)
+    
+    # ==================== DETECTION LOGS SUMMARY ====================
+    # Today's detection count
+    today_detections = db.query(func.count(DetectionLog.id)).filter(
+        DetectionLog.detection_time.between(today_start, today_end)
+    ).scalar() or 0
+    
+    # Unique personnel detected today
+    unique_today = db.query(func.count(func.distinct(DetectionLog.person))).filter(
+        DetectionLog.detection_time.between(today_start, today_end)
+    ).scalar() or 0
+    
+    # This month's detection count
+    month_detections = db.query(func.count(DetectionLog.id)).filter(
+        DetectionLog.detection_time >= month_start
+    ).scalar() or 0
+    
+    # Latest 10 detection logs
+    latest_logs = db.query(DetectionLog).order_by(
+        DetectionLog.detection_time.desc()
+    ).limit(10).all()
+    
+    # Get personnel info for logs
+    personnel_codes = set(log.person for log in latest_logs if log.person)
+    personnel_lookup = {}
+    if personnel_codes:
+        personnel_records = db.query(PersonnelDB).filter(
+            PersonnelDB.national_code.in_(personnel_codes)
+        ).all()
+        personnel_lookup = {p.national_code: p for p in personnel_records}
+    
+    # Format recent logs
+    recent_logs_list = []
+    for log in latest_logs:
+        personnel = personnel_lookup.get(log.person)
+        log_data = {
+            "id": log.id,
+            "person": log.person,
+            "confidence": float(log.confidence) if log.confidence else None,
+            "detection_time": log.detection_time.isoformat() if log.detection_time else None,
+            "face_image_url": get_face_image_url(request, log.id) if log.face_image_path else None,
+            "video_url": get_video_url(request, log.id) if log.video_path else None,
+            "fname": personnel.fname if personnel else None,
+            "lname": personnel.lname if personnel else None,
+            "full_name": f"{personnel.fname} {personnel.lname}".strip() if personnel else None,
+            "access_granted": log.access_granted if hasattr(log, 'access_granted') else None
+        }
+        recent_logs_list.append(log_data)
+    
+    # ==================== ROOMS SUMMARY ====================
+    total_rooms = db.query(func.count(Room.id)).scalar() or 0
+    active_rooms = db.query(func.count(Room.id)).filter(Room.is_active == True).scalar() or 0
+    
+    # Latest 5 rooms
+    latest_rooms = db.query(Room).order_by(Room.created_at.desc()).limit(5).all()
+    latest_rooms_list = [
+        {
+            "id": room.id,
+            "room_number": room.room_number,
+            "room_name": room.room_name,
+            "room_type": room.room_type,
+            "capacity": room.capacity,
+            "is_active": room.is_active,
+            "created_at": room.created_at.isoformat() if room.created_at else None
+        }
+        for room in latest_rooms
+    ]
+    
+    # ==================== COMBINED RESPONSE ====================
+    return {
+        "timestamp": now.isoformat(),
+        "personnel": {
+            "total": total_personnel,
+            "staff": total_staff,
+            "non_staff": total_personnel - total_staff,
+            "latest": latest_personnel_list
+        },
+        "detections": {
+            "today": today_detections,
+            "this_month": month_detections,
+            "unique_personnel_today": unique_today,
+            "recent_logs": recent_logs_list
+        },
+        "rooms": {
+            "total": total_rooms,
+            "active": active_rooms,
+            "latest": latest_rooms_list
+        }
+    }
 
 
 
