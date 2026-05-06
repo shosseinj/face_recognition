@@ -12,7 +12,7 @@ from fastapi import (
 import cv2
 import shutil  # Add this line at the top with other imports
 from sqlalchemy.orm import joinedload
-
+from sqlalchemy.exc import IntegrityError
 from ..validators import normalize_national_code, validate_iran_national_code
 from fastapi import APIRouter, Depends, Request, Query, HTTPException, UploadFile, File, Form
 import uuid  # Add this import
@@ -28,6 +28,10 @@ from ..models.db_functions import (
     delete_personnel_image
 )
 from sqlalchemy import text
+from sqlalchemy import func
+from enum import Enum
+from datetime import datetime, timedelta
+
 
 from ..models.schemas import Personnel as PersonnelSchema, PersonnelWithImages, PersonnelCreate, PersonnelUpdate, PersonnelImageResponse, PersonnelImageResponse, RoomResponse
 router = APIRouter(prefix="/personnel", tags=["personnel"])
@@ -39,11 +43,10 @@ from io import BytesIO
 import re
 from ..models.database import DetectionLog
 from ..models.schemas import DetectionLogResponse
-from datetime import datetime
 from typing import Optional
 # from .detections import get_face_image_url, get_video_url
 from ..utils import get_face_image_url, get_video_url
-# from Face_ai.main import  DeletePointVD, model_mgr.FaceEmbeddingWithoutDetection,  model_mgr.FaceEmbeddingCropping
+# from Face_ai.main import DeletePointVD, FaceEmbeddingWithoutDetection,  FaceEmbeddingCropping
 from ..models.schemas import (
     DetectionLogCreate, DetectionLogResponse, 
     PersonnelImageCreate, PersonnelImageResponse, PersonnelWithImages, PersonnelFromLogsRequest
@@ -52,6 +55,7 @@ from ..models.database import DetectionLog, Personnel as PersonnelDB, PersonnelI
 from ..models.db_functions import get_db
 import numpy as np
 import zipfile
+from backend.app.utils import convert_image_to_base64
 
 from Face_ai.main import ModelManager
 model_mgr = ModelManager()
@@ -296,8 +300,8 @@ async def import_personnel_excel(
                     raise ValueError("دپارتمان باید فقط شامل حروف فارسی باشد")
                 
                 # Check if personnel exists
-                existing = db.query(Personnel).filter(
-                    Personnel.national_code == raw_national_code
+                existing = db.query(PersonnelDB).filter(
+                    PersonnelDB.national_code == raw_national_code
                 ).first()
                 
                 if existing:
@@ -318,7 +322,7 @@ async def import_personnel_excel(
                         })
                 else:
                     # Create new personnel
-                    personnel = Personnel(
+                    personnel = PersonnelDB(
                         fname=fname,
                         lname=lname,
                         national_code=raw_national_code,  # Keep the zero-padded format
@@ -369,7 +373,7 @@ async def import_personnel_excel(
 
 
 
-@router.post("/", response_model=PersonnelSchema, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=PersonnelCreate, status_code=status.HTTP_201_CREATED)
 def create_personnel(personnel: PersonnelCreate, db: Session = Depends(get_db)):
     # Check if national code already exists
     existing = db.query(PersonnelDB).filter(PersonnelDB.national_code == personnel.national_code).first()
@@ -391,40 +395,90 @@ def create_personnel(personnel: PersonnelCreate, db: Session = Depends(get_db)):
     return db_personnel
 
     
-@router.get("/", response_model=List[PersonnelSchema])
-def read_personnel(
+@router.get("/", response_model=List[PersonnelWithImages])
+def get_all_personnel(
     skip: int = 0, 
-    limit: int = 100,
-    include_rooms: bool = Query(True),
+    limit: int = 100, 
     db: Session = Depends(get_db)
 ):
-    """Get all personnel with their rooms"""
-    query = db.query(PersonnelDB)
+    personnel_list = db.query(PersonnelDB).offset(skip).limit(limit).all()
     
-    if include_rooms:
-        query = query.options(joinedload(PersonnelDB.rooms))
+    # Batch load primary images for all personnel
+    personnel_ids = [p.id for p in personnel_list]
+    primary_images = db.query(PersonnelImage).filter(
+        PersonnelImage.personnel_id.in_(personnel_ids),
+        PersonnelImage.is_primary == True
+    ).all()
     
-    personnel = query.order_by(PersonnelDB.id).offset(skip).limit(limit).all()
-    return personnel
+    # Create mapping
+    primary_image_map = {img.personnel_id: img.image_url for img in primary_images}
+    
+    # Build responses
+    responses = []
+    for personnel in personnel_list:
+        response = PersonnelWithImages.model_validate(personnel)
+        response.primary_image = primary_image_map.get(personnel.id)
+        responses.append(response)
+    
+    return responses
 
 
 
-@router.get("/summary")  # Make sure this comes BEFORE /{personnel_id}
+# Define the time period options
+class TimePeriod(str, Enum):
+    TODAY = "today"
+    LAST_WEEK = "last_week"
+    LAST_MONTH = "last_month"
+    CUSTOM = "custom"
+
+@router.get("/summary")
 def get_logs_summary(
-    from_date: Optional[datetime] = Query(None),
-    to_date: Optional[datetime] = Query(None),
+    period: Optional[TimePeriod] = Query(None, description="Time period: today, last_week, last_month, custom"),
+    from_date: Optional[datetime] = Query(None, description="Start date (required if period=custom)"),
+    to_date: Optional[datetime] = Query(None, description="End date (required if period=custom)"),
     db: Session = Depends(get_db)
 ):
-    """Get overall summary for all detection logs"""
+    """Get overall summary for all detection logs with predefined periods or custom date range"""
     from sqlalchemy import func
     
-    query = db.query(DetectionLog)  # ✅ This is fine, no text() needed
+    # Set timezone if needed (assuming UTC or configure as needed)
+    now = datetime.now()
     
+    # Handle period-based date filtering
+    if period == TimePeriod.TODAY:
+        from_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        to_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+    elif period == TimePeriod.LAST_WEEK:
+        from_date = now - timedelta(days=7)
+        to_date = now
+        
+    elif period == TimePeriod.LAST_MONTH:
+        from_date = now - timedelta(days=30)
+        to_date = now
+        
+    elif period == TimePeriod.CUSTOM:
+        # For custom period, from_date and to_date are required
+        if not from_date or not to_date:
+            raise HTTPException(
+                status_code=400,
+                detail="برای دوره سفارشی، تاریخ شروع و پایان الزامی است"
+            )
+    
+    elif period is None:
+        # If no period specified, use all data without date filters
+        pass
+    
+    # Build the query
+    query = db.query(DetectionLog)
+    
+    # Apply date filters if they exist
     if from_date:
         query = query.filter(DetectionLog.detection_time >= from_date)
     if to_date:
         query = query.filter(DetectionLog.detection_time <= to_date)
     
+    # Get statistics
     stats = query.with_entities(
         func.count(DetectionLog.id).label('total'),
         func.avg(DetectionLog.confidence).label('avg_conf'),
@@ -432,34 +486,102 @@ def get_logs_summary(
         func.max(DetectionLog.detection_time).label('last')
     ).first()
     
+    # Count unique personnel
     unique_personnel = query.with_entities(DetectionLog.person).distinct().count()
     
-    return {
+    # Prepare response with period information
+    response = {
+        "period": period.value if period else "all_time",
+        "date_range": {
+            "from": from_date.isoformat() if from_date else None,
+            "to": to_date.isoformat() if to_date else None
+        },
         "total_detections": stats.total or 0,
         "unique_personnel": unique_personnel,
         "average_confidence": round(stats.avg_conf, 2) if stats.avg_conf else 0,
         "first_detection": stats.first.isoformat() if stats.first else None,
         "last_detection": stats.last.isoformat() if stats.last else None
     }
+    
+    return response
+
+
+
+
+
+@router.get("/images", response_model=List[PersonnelImageResponse])
+async def get_all_images(
+    request: Request,
+    skip: int = 0,
+    limit: int = 100,
+    personnel_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(PersonnelImage)
+    
+    if personnel_id:
+        query = query.filter(PersonnelImage.personnel_id == personnel_id)
+    
+    images = query.order_by(PersonnelImage.id.desc()).offset(skip).limit(limit).all()
+    
+    result = []
+    for img in images:
+        try:
+            image_base64 = convert_image_to_base64(img.image_url)
+        except FileNotFoundError:
+            # Simple SVG placeholder
+            image_base64 = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' fill='%23f0f0f0'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%23999' font-size='16'%3ENO IMAGE%3C/text%3E%3C/svg%3E"
+        
+        result.append(
+            PersonnelImageResponse(
+                id=img.id,
+                image_base64=image_base64,
+                personnel_id=img.personnel_id,
+                is_primary=img.is_primary if hasattr(img, 'is_primary') else False,
+                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
+            )
+        )
+    
+    return result
+
 
 
 @router.get("/{personnel_id}", response_model=PersonnelSchema)
 def read_personnel_by_id(
     personnel_id: int,
-    include_rooms: bool = Query(True),
+    include_rooms: bool = Query(True, description="Include room information"),
     db: Session = Depends(get_db)
 ):
-    """Get personnel by ID with their rooms"""
+    """Get personnel by ID with their rooms and last seen time"""
+    
+    # Build query
     query = db.query(PersonnelDB)
     
     if include_rooms:
         query = query.options(joinedload(PersonnelDB.rooms))
     
+    # Get personnel
     db_personnel = query.filter(PersonnelDB.id == personnel_id).first()
     
     if db_personnel is None:
         raise HTTPException(status_code=404, detail="Personnel not found")
-    return db_personnel
+    
+    # Get last seen time
+    last_seen = db.query(func.max(DetectionLog.detection_time)).filter(
+        DetectionLog.person == db_personnel.national_code
+    ).scalar()
+    
+    # Add last_seen attribute to the personnel object
+    
+    db_personnel.last_seen = last_seen
+    
+    response = PersonnelSchema.model_validate(db_personnel)
+    
+    # Add base64 image to the response object
+    response.primary_image_base64 = convert_image_to_base64(db_personnel.primary_image)
+    
+    return response
+
 
 
 
@@ -470,7 +592,7 @@ def read_personnel_by_id(
 #         raise HTTPException(status_code=404, detail="Personnel not found")
 #     return db_personnel
 
-@router.put("/{personnel_id}", response_model=PersonnelSchema)
+@router.put("/{personnel_id}", response_model=PersonnelCreate)
 def update_personnel(personnel_id: int, personnel_update: PersonnelUpdate, db: Session = Depends(get_db)):
     db_personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if db_personnel is None:
@@ -582,10 +704,10 @@ async def get_personnel_with_images(
     Get personnel details along with all their images and rooms
     """
     # Get personnel with images and rooms (eager loading)
-    personnel = db.query(Personnel)\
-        .options(joinedload(Personnel.images))\
-        .options(joinedload(Personnel.rooms))\
-        .filter(Personnel.id == personnel_id)\
+    personnel = db.query(PersonnelDB)\
+        .options(joinedload(PersonnelDB.images))\
+        .options(joinedload(PersonnelDB.rooms))\
+        .filter(PersonnelDB.id == personnel_id)\
         .first()
 
     if not personnel:
@@ -599,7 +721,7 @@ async def get_personnel_with_images(
         images_response.append(
             PersonnelImageResponse(
                 id=img.id,
-                image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
+                image_base64=convert_image_to_base64(img.image_url),
                 personnel_id=img.personnel_id,
                 uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
             )
@@ -667,19 +789,19 @@ def get_personnel_rooms_endpoint(
     ]
 
 
-@router.get("/by-room/{room_id}", response_model=List[PersonnelSchema])
-def get_personnel_by_room(
-    room_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get all personnel who have access to a specific room"""
-    # Use PersonnelDB (SQLAlchemy model) for query
-    personnel_list = db.query(PersonnelDB)\
-        .join(PersonnelDB.rooms)\
-        .filter(RoomDB.id == room_id, RoomDB.is_active == True)\
-        .all()
+# @router.get("/by-room/{room_id}", response_model=List[PersonnelSchema])
+# def get_personnel_by_room(
+#     room_id: int,
+#     db: Session = Depends(get_db)
+# ):
+#     """Get all personnel who have access to a specific room"""
+#     # Use PersonnelDB (SQLAlchemy model) for query
+#     personnel_list = db.query(PersonnelDB)\
+#         .join(PersonnelDB.rooms)\
+#         .filter(RoomDB.id == room_id, RoomDB.is_active == True)\
+#         .all()
     
-    return personnel_list
+#     return personnel_list
 
 
 
@@ -812,7 +934,6 @@ def get_personnel_logs_summary(
     db: Session = Depends(get_db)
 ):
     """Get summary statistics of detection logs for a specific personnel"""
-    from sqlalchemy import func
     
     personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if not personnel:
@@ -847,19 +968,19 @@ def get_personnel_logs_summary(
 
 
 
-#add image to an existing personnel
-@router.post("/{personnel_id}/with-images", response_model=PersonnelWithImages, status_code=status.HTTP_201_CREATED)
+@router.post("/{personnel_id}/images", response_model=PersonnelWithImages, status_code=status.HTTP_201_CREATED)
 async def add_images_to_personnel(
     request: Request,
     personnel_id: int,
     images: List[UploadFile] = File(...),
+    is_primary: Optional[bool] = Form(False),  # ADD is_primary parameter
     db: Session = Depends(get_db)
 ):
     """
     Add multiple images to an existing personnel
     """
     # Check if personnel exists
-    personnel = db.query(Personnel).filter(Personnel.id == personnel_id).first()
+    personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     if not personnel:
         raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
     
@@ -869,6 +990,8 @@ async def add_images_to_personnel(
     
     # Validate file types
     allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+    processed_images = []
+    
     for image in images:
         file_extension = os.path.splitext(image.filename)[1].lower()
         if file_extension not in allowed_extensions:
@@ -877,18 +1000,19 @@ async def add_images_to_personnel(
                 detail=f"نوع داده غیر مجاز! '{image.filename}' انواع داده مجاز: {', '.join(allowed_extensions)}"
             )
         
-        # Read and validate image for vector database
+        # Read and validate image
         contents = await image.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None:
             raise HTTPException(status_code=400, detail=f"Could not read image: {image.filename}")
         
-        # Add to vector database (will be updated with ref_img_id after DB record creation)
-        # We'll store the image data for later use with ref_img_id
-        image.img_data = img
-        image.contents = contents
-        await image.seek(0)
+        processed_images.append({
+            'file': image,
+            'filename': image.filename,
+            'contents': contents,
+            'img': img
+        })
     
     try:
         # Create personnel images directory
@@ -898,11 +1022,11 @@ async def add_images_to_personnel(
         saved_images = []
         
         # Save each image and create database records
-        for image in images:
+        for idx, img_data in enumerate(processed_images):
             # Generate unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_id = str(uuid.uuid4())[:8]
-            file_extension = os.path.splitext(image.filename)[1].lower()
+            file_extension = os.path.splitext(img_data['filename'])[1].lower()
             safe_filename = f"{personnel.fname}_{personnel.lname}_{timestamp}_{unique_id}{file_extension}"
             safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
             
@@ -910,23 +1034,38 @@ async def add_images_to_personnel(
             file_path = personnel_images_dir / safe_filename
             
             with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(image.file, buffer)
+                buffer.write(img_data['contents'])  # Use stored contents instead of seeking
+            
+            # Determine if this should be primary
+            is_primary_img = is_primary and idx == 0  # Only first image if is_primary=True
+            
+            # If setting as primary, unset other primary flags
+            if is_primary_img:
+                db.query(PersonnelImage).filter(
+                    PersonnelImage.personnel_id == personnel_id,
+                    PersonnelImage.is_primary == True
+                ).update({PersonnelImage.is_primary: False})
             
             # Create database record for image
             db_image = PersonnelImage(
                 image_url=str(file_path),
-                personnel_id=personnel_id
+                personnel_id=personnel_id,
+                is_primary=is_primary_img  # ADD is_primary
             )
             
             db.add(db_image)
             db.flush()  # Get ID for this image
             
-            # Now add to vector database with ref_img_id
+            # Add to vector database with ref_img_id
             try:
-                # Use the stored image data
-                model_mgr.FaceEmbeddingWithoutDetection(image.img_data, personnel.national_code, ref_img_id=db_image.id)
-
-                print(f"imgae data {image.img_data}, national code {personnel.national_code}, ref img id {db_image.id}")
+                # Make sure model_mgr is imported/available
+                
+                # from .model_manager import model_mgr  # Adjust import as needed
+                model_mgr.FaceEmbeddingWithoutDetection(
+                    img_data['img'], 
+                    personnel.national_code, 
+                    ref_img_id=db_image.id
+                )
                 print(f"✅ Added to vector DB with ref_img_id: {db_image.id}")
             except Exception as e:
                 print(f"⚠️ Warning: Vector DB insertion failed for image {db_image.id}: {e}")
@@ -940,24 +1079,32 @@ async def add_images_to_personnel(
         # Refresh to get updated relationships
         db.refresh(personnel)
         
-        # Generate URLs for all images (including existing ones)
+        # Generate URLs for all images
         base_url = str(request.base_url).rstrip('/')
         all_images = []
+        primary_image_url = None
         
         # Get all images for this personnel (both existing and new)
         all_images_db = db.query(PersonnelImage).filter(
             PersonnelImage.personnel_id == personnel_id
-        ).order_by(PersonnelImage.id.desc()).all()
+        ).order_by(PersonnelImage.is_primary.desc(), PersonnelImage.id.desc()).all()
         
         for img in all_images_db:
-            all_images.append(
-                PersonnelImageResponse(
-                    id=img.id,
-                    image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
-                    personnel_id=img.personnel_id,
-                    uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
-                )
+            image_response = PersonnelImageResponse(
+                id=img.id,
+                image_base64=img.image_base64,  # Convert to base64
+                personnel_id=img.personnel_id,
+                is_primary=img.is_primary,  # ADD is_primary
+                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
             )
+            all_images.append(image_response)
+            
+            if img.is_primary:
+                primary_image_url = image_response.image_base64
+        
+        # If no primary image set and there are images, set first as primary
+        if not primary_image_url and all_images:
+            primary_image_url = all_images[0].image_base64
         
         return PersonnelWithImages(
             id=personnel.id,
@@ -967,7 +1114,9 @@ async def add_images_to_personnel(
             staff=personnel.staff,
             department=personnel.department,
             created_at=personnel.created_at,
-            images=all_images
+            rooms=[],  # Add rooms if needed
+            images=all_images,
+            primary_image=primary_image_url  # ADD primary_image
         )
         
     except Exception as e:
@@ -976,17 +1125,18 @@ async def add_images_to_personnel(
         
         # Clean up any saved files for this batch
         if 'personnel_images_dir' in locals() and personnel_images_dir.exists():
-            # Only delete the files we just created (optional)
-            for image in saved_images:
+            for img in saved_images:
                 try:
-                    Path(image.image_url).unlink()
+                    if hasattr(img, 'image_url') and Path(img.image_url).exists():
+                        Path(img.image_url).unlink()
                 except:
                     pass
         
         print(f"Error adding images to personnel: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to add images: {str(e)}")
-
-
+    
 
 
 
@@ -1089,7 +1239,7 @@ async def create_personnel_with_images(
             images_response.append(
                 PersonnelImageResponse(
                     id=img.id,
-                    image_url=f"{base_url}/api/v1/personnel/{db_personnel.id}/images/{img.id}/file",
+                    image_base64=convert_image_to_base64(img.image_url),
                     personnel_id=img.personnel_id,
                     uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
                 )
@@ -1120,6 +1270,12 @@ async def create_personnel_with_images(
 
 
 
+
+from typing import Optional
+
+
+
+
 @router.get("/{personnel_id}/images", response_model=List[PersonnelImageResponse])
 async def get_personnel_images(
     personnel_id: int,
@@ -1146,13 +1302,17 @@ async def get_personnel_images(
         result.append(
             PersonnelImageResponse(
                 id=img.id,
-                image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
+                image_base64=convert_image_to_base64(img.image_url),  # Direct file path
                 personnel_id=img.personnel_id,
-                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
+                is_primary=img.is_primary,
+                uploaded_at=img.uploaded_at
             )
         )
     
     return result
+
+
+
 
 
 
@@ -1197,48 +1357,6 @@ async def get_personnel_with_images(
         images=images_response
     )
 
-
-
-from typing import Optional
-
-@router.get("/images", response_model=List[PersonnelImageResponse])
-async def get_all_images(
-    request: Request,
-    skip: int = 0,
-    limit: int = 100,
-    personnel_id: Optional[int] = None,  # Optional filter by personnel
-    db: Session = Depends(get_db)
-):
-    """
-    Get all images with optional filtering
-    - skip: Number of records to skip (pagination)
-    - limit: Maximum number of records to return
-    - personnel_id: Filter by specific personnel (optional)
-    """
-    query = db.query(PersonnelImage)
-    
-    # Apply filter if personnel_id is provided
-    if personnel_id:
-        query = query.filter(PersonnelImage.personnel_id == personnel_id)
-    
-    # Get images with pagination
-    images = query.order_by(PersonnelImage.id.desc()).offset(skip).limit(limit).all()
-    
-    # Generate URLs
-    base_url = str(request.base_url).rstrip('/')
-    result = []
-    
-    for img in images:
-        result.append(
-            PersonnelImageResponse(
-                id=img.id,
-                image_url=f"{base_url}/api/v1/personnel/{img.personnel_id}/images/{img.id}/file",
-                personnel_id=img.personnel_id,
-                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
-            )
-        )
-    
-    return result
 
 
 
@@ -1289,345 +1407,345 @@ async def serve_personnel_image(
     )
 
 
-@router.post("/from-log",response_model=List[PersonnelWithImages],
-    status_code=status.HTTP_201_CREATED
-)
-async def create_personnel_from_multiple_logs(
-    request: Request,
-    data: PersonnelFromLogsRequest,
-    db: Session = Depends(get_db)
-    ):
+# @router.post("/from-log",response_model=List[PersonnelWithImages],
+#     status_code=status.HTTP_201_CREATED
+# )
+# async def create_personnel_from_multiple_logs(
+#     request: Request,
+#     data: PersonnelFromLogsRequest,
+#     db: Session = Depends(get_db)
+#     ):
     
-    fname = data.fname
-    lname = data.lname
-    national_code = data.national_code
-    staff = data.staff
-    department = data.department
-    log_ids = data.log_ids
+#     fname = data.fname
+#     lname = data.lname
+#     national_code = data.national_code
+#     staff = data.staff
+#     department = data.department
+#     log_ids = data.log_ids
 
 
    
-    """
-    Create a new personnel OR attach images to an existing personnel
-    for multiple detection logs.
-    Each log generates one new PersonnelImage.
-    """
+#     """
+#     Create a new personnel OR attach images to an existing personnel
+#     for multiple detection logs.
+#     Each log generates one new PersonnelImage.
+#     """
 
-    # Check if personnel already exists
-    existing = db.query(PersonnelDB).filter(PersonnelDB.national_code == national_code).first()
+#     # Check if personnel already exists
+#     existing = db.query(PersonnelDB).filter(PersonnelDB.national_code == national_code).first()
 
-    # If not exists → create personnel
-    if not existing:
-        db_personnel = PersonnelDB(
-            fname=fname,
-            lname=lname,
-            national_code=national_code,
-            staff=staff,
-            department=department
-        )
-        db.add(db_personnel)
-        db.flush()   # get db_personnel.id
-    else:
-        db_personnel = existing
+#     # If not exists → create personnel
+#     if not existing:
+#         db_personnel = PersonnelDB(
+#             fname=fname,
+#             lname=lname,
+#             national_code=national_code,
+#             staff=staff,
+#             department=department
+#         )
+#         db.add(db_personnel)
+#         db.flush()   # get db_personnel.id
+#     else:
+#         db_personnel = existing
 
-    personnel_id = db_personnel.id
+#     personnel_id = db_personnel.id
 
-    # Ensure folder exists
-    personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(personnel_id)
-    personnel_images_dir.mkdir(parents=True, exist_ok=True)
+#     # Ensure folder exists
+#     personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(personnel_id)
+#     personnel_images_dir.mkdir(parents=True, exist_ok=True)
 
-    results = []
+#     results = []
 
-    for log_id in log_ids:
+#     for log_id in log_ids:
 
-        detection_log = db.query(DetectionLog).filter(DetectionLog.id == log_id).first()
-        if not detection_log:
-            raise HTTPException(status_code=404, detail=f"Detection log {log_id} not found")
+#         detection_log = db.query(DetectionLog).filter(DetectionLog.id == log_id).first()
+#         if not detection_log:
+#             raise HTTPException(status_code=404, detail=f"Detection log {log_id} not found")
 
-        if not detection_log.face_image_path:
-            raise HTTPException(status_code=400, detail=f"Log {log_id} has no face image")
+#         if not detection_log.face_image_path:
+#             raise HTTPException(status_code=400, detail=f"Log {log_id} has no face image")
 
-        face_image_path = Path(detection_log.face_image_path)
-        if not face_image_path.exists():
-            raise HTTPException(status_code=404, detail=f"Face image for log {log_id} not found")
+#         face_image_path = Path(detection_log.face_image_path)
+#         if not face_image_path.exists():
+#             raise HTTPException(status_code=404, detail=f"Face image for log {log_id} not found")
 
-        # Validate extension
-        allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
-        ext = face_image_path.suffix.lower()
-        if ext not in allowed_extensions:
-            raise HTTPException(status_code=400, detail=f"Invalid extension for log {log_id}")
+#         # Validate extension
+#         allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+#         ext = face_image_path.suffix.lower()
+#         if ext not in allowed_extensions:
+#             raise HTTPException(status_code=400, detail=f"Invalid extension for log {log_id}")
 
-        # Copy image to personnel folder
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = uuid.uuid4().hex[:8]
-        safe_name = f"{fname}_{lname}_log{log_id}_{timestamp}_{unique_id}{ext}"
-        safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_name)
+#         # Copy image to personnel folder
+#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#         unique_id = uuid.uuid4().hex[:8]
+#         safe_name = f"{fname}_{lname}_log{log_id}_{timestamp}_{unique_id}{ext}"
+#         safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_name)
 
-        save_path = personnel_images_dir / safe_name
-        shutil.copy2(face_image_path, save_path)
+#         save_path = personnel_images_dir / safe_name
+#         shutil.copy2(face_image_path, save_path)
 
-        # Create DB Image record
-        db_image = PersonnelImage(
-            image_url=str(save_path),
-            personnel_id=personnel_id
-        )
-        db.add(db_image)
-        db.flush()
+#         # Create DB Image record
+#         db_image = PersonnelImage(
+#             image_url=str(save_path),
+#             personnel_id=personnel_id
+#         )
+#         db.add(db_image)
+#         db.flush()
 
-        # Read and embed face
-        img = cv2.imread(str(face_image_path))
-        if img is None:
-            raise HTTPException(status_code=400, detail=f"Cannot read image for log {log_id}")
+#         # Read and embed face
+#         img = cv2.imread(str(face_image_path))
+#         if img is None:
+#             raise HTTPException(status_code=400, detail=f"Cannot read image for log {log_id}")
 
-        model_mgr.FaceEmbeddingWithoutDetection(img, national_code, ref_img_id=db_image.id)
+#         model_mgr.FaceEmbeddingWithoutDetection(img, national_code, ref_img_id=db_image.id)
 
-        db.commit()
-        db.refresh(db_personnel)
+#         db.commit()
+#         db.refresh(db_personnel)
 
-        # Build response object for this log
-        base_url = str(request.base_url).rstrip("/")
-        image_response = PersonnelImageResponse(
-            id=db_image.id,
-            image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{db_image.id}/file",
-            personnel_id=personnel_id,
-            uploaded_at=db_image.uploaded_at
-        )
+#         # Build response object for this log
+#         base_url = str(request.base_url).rstrip("/")
+#         image_response = PersonnelImageResponse(
+#             id=db_image.id,
+#             image_base64=convert_image_to_base64(img.image_url),  # Convert to base64
+#             personnel_id=personnel_id,
+#             uploaded_at=db_image.uploaded_at
+#         )
 
-        # Mark log as processed
-        detection_log.personnel_id = personnel_id
-        detection_log.is_processed = True
-        db.add(detection_log)
-        db.commit()
+#         # Mark log as processed
+#         detection_log.personnel_id = personnel_id
+#         detection_log.is_processed = True
+#         db.add(detection_log)
+#         db.commit()
 
-        # Add to results
-        results.append(
-            PersonnelWithImages(
-                id=personnel_id,
-                fname=db_personnel.fname,
-                lname=db_personnel.lname,
-                national_code=db_personnel.national_code,
-                staff=db_personnel.staff,
-                department=db_personnel.department,
-                created_at=db_personnel.created_at,
-                images=[image_response]
-            )
-        )
+#         # Add to results
+#         results.append(
+#             PersonnelWithImages(
+#                 id=personnel_id,
+#                 fname=db_personnel.fname,
+#                 lname=db_personnel.lname,
+#                 national_code=db_personnel.national_code,
+#                 staff=db_personnel.staff,
+#                 department=db_personnel.department,
+#                 created_at=db_personnel.created_at,
+#                 images=[image_response]
+#             )
+#         )
 
-    return results
+#     return results
 
     
 
 
 
-@router.post("/upload-personnel-zip")
-async def upload_personnel_zip(
-    file: UploadFile = File(...),
-    skip_invalid_national_codes: bool = False,
-    db: Session = Depends(get_db)  # Add database session
-):
-    # Validate file type
-    if not file.filename.endswith('.zip'):
-        raise HTTPException(status_code=400, detail="Only zip files are accepted")
+# @router.post("/upload-personnel-zip")
+# async def upload_personnel_zip(
+#     file: UploadFile = File(...),
+#     skip_invalid_national_codes: bool = False,
+#     db: Session = Depends(get_db)  # Add database session
+# ):
+#     # Validate file type
+#     if not file.filename.endswith('.zip'):
+#         raise HTTPException(status_code=400, detail="Only zip files are accepted")
     
-    # Allowed image extensions
-    ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp'}
+#     # Allowed image extensions
+#     ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.rar'}
     
-    try:
-        contents = await file.read()
-        print(f"📦 Zip file size: {len(contents)} bytes")
-        zip_data = BytesIO(contents)
+#     try:
+#         contents = await file.read()
+#         print(f"📦 Zip file size: {len(contents)} bytes")
+#         zip_data = BytesIO(contents)
         
-        if not zipfile.is_zipfile(zip_data):
-            raise HTTPException(status_code=400, detail="Invalid zip file")
+#         if not zipfile.is_zipfile(zip_data):
+#             raise HTTPException(status_code=400, detail="Invalid zip file")
             
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not read zip file: {str(e)}")
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=f"Could not read zip file: {str(e)}")
     
-    processed_count = 0
-    error_count = 0
-    results = []
-    skipped_folders = []
-    all_saved_images = []  # Track all saved images for response
+#     processed_count = 0
+#     error_count = 0
+#     results = []
+#     skipped_folders = []
+#     all_saved_images = []  # Track all saved images for response
     
-    with zipfile.ZipFile(zip_data, 'r') as zip_ref:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"\n📂 Extracting to: {temp_dir}")
-            zip_ref.extractall(temp_dir)
-            temp_path = Path(temp_dir)
+#     with zipfile.ZipFile(zip_data, 'r') as zip_ref:
+#         with tempfile.TemporaryDirectory() as temp_dir:
+#             print(f"\n📂 Extracting to: {temp_dir}")
+#             zip_ref.extractall(temp_dir)
+#             temp_path = Path(temp_dir)
             
-            for person_dir in temp_path.iterdir():
-                if not person_dir.is_dir() or person_dir.name == '__MACOSX':
-                    continue
+#             for person_dir in temp_path.iterdir():
+#                 if not person_dir.is_dir() or person_dir.name == '__MACOSX':
+#                     continue
                 
-                national_code = person_dir.name
-                print(f"\n{'='*50}")
-                print(f"👤 Processing person with national code: {national_code}")
+#                 national_code = person_dir.name
+#                 print(f"\n{'='*50}")
+#                 print(f"👤 Processing person with national code: {national_code}")
                 
-                # Validate national code format
-                is_valid_national_code = national_code.isdigit() and len(national_code) == 10
+#                 # Validate national code format
+#                 is_valid_national_code = national_code.isdigit() and len(national_code) == 10
                 
-                if not is_valid_national_code:
-                    if skip_invalid_national_codes:
-                        print(f"⚠️ Invalid national code - SKIPPING")
-                        skipped_folders.append({
-                            "folder": national_code,
-                            "reason": "Invalid national code format"
-                        })
-                        continue
+#                 if not is_valid_national_code:
+#                     if skip_invalid_national_codes:
+#                         print(f"⚠️ Invalid national code - SKIPPING")
+#                         skipped_folders.append({
+#                             "folder": national_code,
+#                             "reason": "Invalid national code format"
+#                         })
+#                         continue
                 
-                # Check if personnel exists in database, if not create it
-                personnel = db.query(PersonnelDB).filter(PersonnelDB.national_code == national_code).first()
+#                 # Check if personnel exists in database, if not create it
+#                 personnel = db.query(PersonnelDB).filter(PersonnelDB.national_code == national_code).first()
                 
-                if not personnel:
-                    # Create new personnel if it doesn't exist
-                    print(f"👤 Personnel not found, creating new record")
-                    personnel = PersonnelDB(
-                        fname=f"فرد_{national_code}",  # Placeholder name
-                        lname="",
-                        national_code=national_code,
-                        staff=False,
-                        department=None
-                    )
-                    db.add(personnel)
-                    db.flush()  # Get ID without committing
-                    print(f"✅ Created new personnel with ID: {personnel.id}")
-                else:
-                    print(f"✅ Found existing personnel with ID: {personnel.id}")
+#                 if not personnel:
+#                     # Create new personnel if it doesn't exist
+#                     print(f"👤 Personnel not found, creating new record")
+#                     personnel = PersonnelDB(
+#                         fname=f"فرد_{national_code}",  # Placeholder name
+#                         lname="",
+#                         national_code=national_code,
+#                         staff=False,
+#                         department=None
+#                     )
+#                     db.add(personnel)
+#                     db.flush()  # Get ID without committing
+#                     print(f"✅ Created new personnel with ID: {personnel.id}")
+#                 else:
+#                     print(f"✅ Found existing personnel with ID: {personnel.id}")
                 
-                # Create personnel images directory
-                personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(personnel.id)
-                personnel_images_dir.mkdir(parents=True, exist_ok=True)
+#                 # Create personnel images directory
+#                 personnel_images_dir = FACE_STORAGE_DIR / "personnel" / str(personnel.id)
+#                 personnel_images_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Get unique image files
-                image_files = set()
-                for ext in ALLOWED_EXTENSIONS:
-                    for pattern in [f"*{ext}", f"*{ext.upper()}"]:
-                        for img_path in person_dir.glob(pattern):
-                            if not img_path.name.startswith('._'):
-                                image_files.add(img_path)
+#                 # Get unique image files
+#                 image_files = set()
+#                 for ext in ALLOWED_EXTENSIONS:
+#                     for pattern in [f"*{ext}", f"*{ext.upper()}"]:
+#                         for img_path in person_dir.glob(pattern):
+#                             if not img_path.name.startswith('._'):
+#                                 image_files.add(img_path)
                 
-                image_files = list(image_files)
-                print(f"  🖼️ Found {len(image_files)} unique images")
+#                 image_files = list(image_files)
+#                 print(f"  🖼️ Found {len(image_files)} unique images")
                 
-                if not image_files:
-                    results.append({
-                        "national_code": national_code,
-                        "status": "warning",
-                        "message": "No images found in folder",
-                        "valid_format": is_valid_national_code
-                    })
-                    continue
+#                 if not image_files:
+#                     results.append({
+#                         "national_code": national_code,
+#                         "status": "warning",
+#                         "message": "No images found in folder",
+#                         "valid_format": is_valid_national_code
+#                     })
+#                     continue
                 
-                person_processed = 0
-                person_errors = 0
-                error_details = []
-                saved_images = []
+#                 person_processed = 0
+#                 person_errors = 0
+#                 error_details = []
+#                 saved_images = []
                 
-                for img_path in image_files:
-                    try:
-                        print(f"\n  📸 Processing: {img_path.name}")
+#                 for img_path in image_files:
+#                     try:
+#                         print(f"\n  📸 Processing: {img_path.name}")
                         
-                        # Read image
-                        img = cv2.imread(str(img_path))
-                        if img is None:
-                            raise ValueError("Could not decode image")
+#                         # Read image
+#                         img = cv2.imread(str(img_path))
+#                         if img is None:
+#                             raise ValueError("Could not decode image")
                         
-                        # Generate filename for saving
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        unique_id = str(uuid.uuid4())[:8]
-                        safe_filename = f"{personnel.fname}_{timestamp}_{unique_id}{img_path.suffix.lower()}"
-                        safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
+#                         # Generate filename for saving
+#                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#                         unique_id = str(uuid.uuid4())[:8]
+#                         safe_filename = f"{personnel.fname}_{timestamp}_{unique_id}{img_path.suffix.lower()}"
+#                         safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe_filename)
                         
-                        file_path = personnel_images_dir / safe_filename
+#                         file_path = personnel_images_dir / safe_filename
                         
-                        # Copy file to permanent storage
+#                         # Copy file to permanent storage
                         
-                        # Create database record
-                        db_image = PersonnelImage(
-                            image_url=str(file_path),
-                            personnel_id=personnel.id
-                        )
-                        db.add(db_image)
-                        db.flush()  # Get ID without committing
+#                         # Create database record
+#                         db_image = PersonnelImage(
+#                             image_url=str(file_path),
+#                             personnel_id=personnel.id
+#                         )
+#                         db.add(db_image)
+#                         db.flush()  # Get ID without committing
                         
-                        print(f"     🆔 Database record created with ID: {db_image.id}")
+#                         print(f"     🆔 Database record created with ID: {db_image.id}")
                         
-                        # Save to vector database with ref_img_id
-                        print(f"     🔄 Adding to vector database with ref_img_id: {db_image.id}")
-                        cropped_img = model_mgr.FaceEmbeddingCropping(img, national_code,  ref_img_id=db_image.id)
-                        cv2.imwrite(str(file_path), cropped_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+#                         # Save to vector database with ref_img_id
+#                         print(f"     🔄 Adding to vector database with ref_img_id: {db_image.id}")
+#                         cropped_img = model_mgr.FaceEmbeddingCropping(img, national_code,  ref_img_id=db_image.id)
+#                         cv2.imwrite(str(file_path), cropped_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
                       
-                        saved_images.append({
-                            "id": db_image.id,
-                            "file_name": safe_filename,
-                            "file_path": str(file_path)
-                        })
+#                         saved_images.append({
+#                             "id": db_image.id,
+#                             "file_name": safe_filename,
+#                             "file_path": str(file_path)
+#                         })
                         
-                        print(f"  ✅ Successfully processed: {img_path.name}")
-                        person_processed += 1
+#                         print(f"  ✅ Successfully processed: {img_path.name}")
+#                         person_processed += 1
                         
-                    except Exception as e:
-                        print(f"  ❌ Error processing {img_path.name}: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
-                        person_errors += 1
-                        error_details.append({
-                            "file": img_path.name,
-                            "error": str(e)
-                        })
+#                     except Exception as e:
+#                         print(f"  ❌ Error processing {img_path.name}: {str(e)}")
+#                         import traceback
+#                         traceback.print_exc()
+#                         person_errors += 1
+#                         error_details.append({
+#                             "file": img_path.name,
+#                             "error": str(e)
+#                         })
                 
-                # Commit all changes for this personnel
-                db.commit()
+#                 # Commit all changes for this personnel
+#                 db.commit()
                 
-                processed_count += person_processed
-                error_count += person_errors
+#                 processed_count += person_processed
+#                 error_count += person_errors
                 
-                results.append({
-                    "national_code": national_code,
-                    "personnel_id": personnel.id,
-                    "status": "success" if person_processed > 0 else "error",
-                    "valid_format": is_valid_national_code,
-                    "processed": person_processed,
-                    "errors": person_errors,
-                    "total_images": len(image_files),
-                    "saved_images": saved_images,
-                    "error_details": error_details if error_details else None
-                })
+#                 results.append({
+#                     "national_code": national_code,
+#                     "personnel_id": personnel.id,
+#                     "status": "success" if person_processed > 0 else "error",
+#                     "valid_format": is_valid_national_code,
+#                     "processed": person_processed,
+#                     "errors": person_errors,
+#                     "total_images": len(image_files),
+#                     "saved_images": saved_images,
+#                     "error_details": error_details if error_details else None
+#                 })
                 
-                all_saved_images.extend(saved_images)
-                print(f"\n  📊 Summary for {national_code}: {person_processed}/{len(image_files)} processed")
+#                 all_saved_images.extend(saved_images)
+#                 print(f"\n  📊 Summary for {national_code}: {person_processed}/{len(image_files)} processed")
     
-    print(f"\n{'='*50}")
-    print(f"📊 FINAL SUMMARY")
-    print(f"{'='*50}")
-    print(f"Total processed: {processed_count}")
-    print(f"Total errors: {error_count}")
-    print(f"Total persons: {len(results)}")
-    print(f"Total images saved: {len(all_saved_images)}")
+#     print(f"\n{'='*50}")
+#     print(f"📊 FINAL SUMMARY")
+#     print(f"{'='*50}")
+#     print(f"Total processed: {processed_count}")
+#     print(f"Total errors: {error_count}")
+#     print(f"Total persons: {len(results)}")
+#     print(f"Total images saved: {len(all_saved_images)}")
     
-    return {
-        "success": True,
-        "filename": file.filename,
-        "message": f"Processed {processed_count} images, {error_count} errors",
-        "summary": {
-            "total_processed": processed_count,
-            "total_errors": error_count,
-            "total_persons": len(results),
-            "total_images_saved": len(all_saved_images),
-            "skipped_folders": len(skipped_folders)
-        },
-        "details": results,
-        "skipped_folders": skipped_folders if skipped_folders else None
-    }
+#     return {
+#         "success": True,
+#         "filename": file.filename,
+#         "message": f"Processed {processed_count} images, {error_count} errors",
+#         "summary": {
+#             "total_processed": processed_count,
+#             "total_errors": error_count,
+#             "total_persons": len(results),
+#             "total_images_saved": len(all_saved_images),
+#             "skipped_folders": len(skipped_folders)
+#         },
+#         "details": results,
+#         "skipped_folders": skipped_folders if skipped_folders else None
+#     }
 
 
 # Add these new endpoints for personnel-room relationships
-@router.get("/{personnel_id}/rooms")
-def get_personnel_rooms_list(
-    personnel_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get all rooms a personnel has access to"""
-    rooms = get_personnel_rooms(personnel_id=personnel_id, db=db)
-    return rooms
+# @router.get("/{personnel_id}/rooms")
+# def get_personnel_rooms_list(
+#     personnel_id: int,
+#     db: Session = Depends(get_db)
+# ):
+#     """Get all rooms a personnel has access to"""
+#     rooms = get_personnel_rooms(personnel_id=personnel_id, db=db)
+#     return rooms

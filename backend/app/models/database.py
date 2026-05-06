@@ -12,6 +12,8 @@ from pathlib import Path
 import uuid
 from ..video_utils import save_video_with_ffmpeg, save_fallback_opencv
 import asyncio
+from typing import Optional
+import base64
 # ==================== CONFIGURATION ====================
 FACE_STORAGE_DIR = Path("saved_media")
 FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
@@ -117,6 +119,16 @@ class Personnel(Base):
     )
     rooms = relationship("Room", secondary=personnel_room_association, back_populates="personnel")
 
+    @property
+    def primary_image(self) -> Optional[str]:
+        """Get the primary image URL"""
+        primary = next((img for img in self.images if img.is_primary), None)
+        if primary:
+            return primary.image_url
+        # Return first image if exists
+        return self.images[0].image_url if self.images else None
+    
+    
 class Room(Base):
     __tablename__ = "Rooms"
     
@@ -148,16 +160,14 @@ class DetectionLog(Base):
     person = Column(String(200), nullable=False)
     area = Column(String(200), nullable=True)
     confidence = Column(Float, nullable=True)
-    detection_time = Column(DateTime, server_default=func.now())
+    detection_time = Column(DateTime, default=datetime.now)
     face_image_path = Column(String(512), nullable=True)
     video_path = Column(String(512), nullable=True)
     camera_id = Column(Integer, nullable=True)
     # created_at = Column(DateTime, server_default=func.now())
-    created_at = Column(DateTime, default=datetime.now)
+    # created_at = Column(DateTime, default=datetime.now)
     room_id = Column(Integer, ForeignKey('Rooms.id'), nullable=True)
-    access_granted = Column(Boolean, nullable=True)  # ADD THIS FIELD
-
-    
+    access_granted = Column(Boolean, nullable=False, default=True)
     room = relationship("Room")
 
             
@@ -173,3 +183,15 @@ class PersonnelImage(Base):
     uploaded_at = Column(DateTime, default=datetime.now)
     
     personnel = relationship("Personnel", back_populates="images")
+
+    @property
+    def image_base64(self) -> str:
+        """Convert image file to base64 string"""
+        if not self.image_url:
+            return ""
+        try:
+            with open(self.image_url, 'rb') as image_file:
+                return base64.b64encode(image_file.read()).decode('utf-8')
+        except Exception:
+            return ""
+        

@@ -50,7 +50,6 @@ from io import BytesIO  # IMPORT THIS!
 # from Face_ai.main import FrameProcessing, FaceEmbedding, FaceEmbeddingCropping
 from Face_ai.main import ModelManager
 
-
 processor_task = None
 BASE_DIR = Path(__file__).resolve().parent  # This points to backend/app/
 STATIC_DIR = BASE_DIR / "static"
@@ -592,7 +591,7 @@ async def process_frame(model,loaded_polygon_points, frame, cam_id, polygon_poin
                     for area in unique_areas:
                         if final_name == 'Unknown':
                             final_name = final_name +' #' + str(obj)
-                        log_id = save_detection_with_face(
+                        log_id = await save_detection_with_face(
                             person=final_name,
                             confidence=float(final_score),
                             face_image=final_face,
@@ -646,13 +645,13 @@ async def video_broadcaster():
     # {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
     # {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": './video6.mp4'},
-    {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
-    # {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
     # {"type": "cv2", "src": 0},
-    # {"type": "rtsp", "src": config.RTSP_URL}
+    {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
+    # {"type": "cv2", "src": 0},
+    {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
     model = ModelManager()
@@ -684,12 +683,12 @@ def save_disappeared_object(obj, history):
         end_idx = min(len(history["frames"]), best_idx + config.HALF_CLIP)
         frames_to_save = list(history["frames"])[start_idx:end_idx]
         
-        save_detection_with_face(
+        asyncio.run(save_detection_with_face(
             person=final_name,
             confidence=float(final_score),
             face_image=final_face,
             frames_to_save=frames_to_save
-        )
+        ))
 
 async def broadcast_frame(data: dict):
     """Broadcast frame and metadata using the manager"""

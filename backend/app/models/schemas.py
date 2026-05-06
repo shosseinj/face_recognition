@@ -36,12 +36,30 @@ class RoomResponse(RoomBase):
 
 
 # ==================== DETECTION LOG SCHEMAS ====================
+# class DetectionLogCreate(BaseModel):
+#     person: str
+#     confidence: Optional[float] = None
+#     ref_img_id: Optional[int] = None
+#     face_image_path: Optional[str] = None
+
+
 class DetectionLogCreate(BaseModel):
     person: str
     confidence: Optional[float] = None
     ref_img_id: Optional[int] = None
     face_image_path: Optional[str] = None
+    
+    # Additional fields you might want to add:
+    detection_time: Optional[datetime] = None  # Allow custom time, defaults to now()
+    room_id: Optional[int] = None
+    access_granted: Optional[bool] = None
+    video_url: Optional[str] = None
+    camera_id: Optional[int] = None  # If you have multiple cameras
+    
+    class Config:
+        from_attributes = True
 
+        
 class LogSummaryResponse(BaseModel):
     total_detections: int
     unique_personnel: int
@@ -101,7 +119,9 @@ class Personnel(BaseModel):
     department: Optional[str] = None
     created_at: datetime
     rooms: List[RoomResponse] = []  # Add rooms field
-    
+    primary_image: Optional[str]
+    last_seen : Optional[datetime]
+    primary_image_base64: Optional[str] = None  # ADD THIS LINE
     class Config:
         from_attributes = True
 
@@ -110,12 +130,16 @@ class Personnel(BaseModel):
 class PersonnelImageBase(BaseModel):
     image_url: str
     personnel_id: int
+    is_primary: Optional[bool] = False  # ADD THIS
 
 class PersonnelImageCreate(PersonnelImageBase):
     pass
 
-class PersonnelImageResponse(PersonnelImageBase):
+class PersonnelImageResponse(BaseModel):
     id: int
+    image_base64: str  # Changed from image_url to image_base64
+    personnel_id: int
+    is_primary: Optional[bool] = False
     uploaded_at: Optional[datetime] = None
     
     class Config:
@@ -133,6 +157,7 @@ class PersonnelWithImages(BaseModel):
     created_at: Optional[datetime] = None
     rooms: List[RoomResponse] = []  # Include rooms
     images: List[PersonnelImageResponse] = []
+    primary_image: Optional[str] = None  # ADD THIS FIELD
     
     class Config:
         from_attributes = True
