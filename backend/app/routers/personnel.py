@@ -789,19 +789,19 @@ def get_personnel_rooms_endpoint(
     ]
 
 
-@router.get("/by-room/{room_id}", response_model=List[PersonnelSchema])
-def get_personnel_by_room(
-    room_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get all personnel who have access to a specific room"""
-    # Use PersonnelDB (SQLAlchemy model) for query
-    personnel_list = db.query(PersonnelDB)\
-        .join(PersonnelDB.rooms)\
-        .filter(RoomDB.id == room_id, RoomDB.is_active == True)\
-        .all()
+# @router.get("/by-room/{room_id}", response_model=List[PersonnelSchema])
+# def get_personnel_by_room(
+#     room_id: int,
+#     db: Session = Depends(get_db)
+# ):
+#     """Get all personnel who have access to a specific room"""
+#     # Use PersonnelDB (SQLAlchemy model) for query
+#     personnel_list = db.query(PersonnelDB)\
+#         .join(PersonnelDB.rooms)\
+#         .filter(RoomDB.id == room_id, RoomDB.is_active == True)\
+#         .all()
     
-    return personnel_list
+#     return personnel_list
 
 
 
@@ -1741,11 +1741,11 @@ async def serve_personnel_image(
 
 
 # Add these new endpoints for personnel-room relationships
-@router.get("/{personnel_id}/rooms")
-def get_personnel_rooms_list(
-    personnel_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get all rooms a personnel has access to"""
-    rooms = get_personnel_rooms(personnel_id=personnel_id, db=db)
-    return rooms
+# @router.get("/{personnel_id}/rooms")
+# def get_personnel_rooms_list(
+#     personnel_id: int,
+#     db: Session = Depends(get_db)
+# ):
+#     """Get all rooms a personnel has access to"""
+#     rooms = get_personnel_rooms(personnel_id=personnel_id, db=db)
+#     return rooms
