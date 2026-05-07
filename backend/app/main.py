@@ -488,7 +488,7 @@ def frame_generator(sources):
 
         if cam["type"] == "cv2":
             cap = cam["reader"]
-            cap.grab()
+            # cap.grab()
             ret, frame = cap.read()
             if not ret:
                 cam_index = (cam_index + 1) % num_cams
@@ -510,101 +510,102 @@ def frame_generator(sources):
 import json
 
 async def process_frame(model,loaded_polygon_points, frame, cam_id, polygon_points, try_objs, track_history):
-    
-    clip_length = 100
-    half_clip = clip_length // 2
-    # data = {
-    #                         "frames": frame,
-    #                         "persons": [],
-    #                         "scores":[],
-    #                         "faces": [],
-    #                         "objs": [],
-    #                         "ref_img_ids": [],
-    #                         "area": [],
-    #                     }
-    data = model.FrameProcessing(frame, loaded_polygon_points)
-    data['cam_id'] = cam_id
+    try:
+        clip_length = 100
+        half_clip = clip_length // 2
+        # data = {
+        #                         "frames": frame,
+        #                         "persons": [],
+        #                         "scores":[],
+        #                         "faces": [],
+        #                         "objs": [],
+        #                         "ref_img_ids": [],
+        #                         "area": [],
+        #                     }
+        data = model.FrameProcessing(frame, loaded_polygon_points)
+        data['cam_id'] = cam_id
 
-    persons = data['persons'] 
-    scores = data['scores']
-    
-    faces = data['faces']
-    areas = data['area']
-    objs = data['objs']
-    ref_img_ids = data['ref_img_ids']
-
-    current_objs = set(objs)
-
-
-    for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
-        history = track_history[obj]
-        history["frames"].append(frame)
+        persons = data['persons'] 
+        scores = data['scores']
         
-        if person:
-            history["ref_img_ids"].append(ref_img_id)
-            history["names"].append(person)
-            history["scores"].append(score)
-            history["faces"].append(face)
-            history["areas"].append(area)
+        faces = data['faces']
+        areas = data['area']
+        objs = data['objs']
+        ref_img_ids = data['ref_img_ids']
+
+        current_objs = set(objs)
 
 
-    disappeared_objs = set(track_history.keys()) - current_objs
-    
-    for obj in current_objs:
-        try_objs.pop(obj, None) 
-
-    for obj in disappeared_objs:
-        try_objs[obj] = try_objs.get(obj, 0) + 1
-
-    
-    for obj, count in list(try_objs.items()):
-        if count > 70:
+        for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
             history = track_history[obj]
-            if history["names"]:
-                name_counts = Counter(history["names"])
-                final_name, count = name_counts.most_common(1)[0]
+            history["frames"].append(frame)
+            
+            if person:
+                history["ref_img_ids"].append(ref_img_id)
+                history["names"].append(person)
+                history["scores"].append(score)
+                history["faces"].append(face)
+                history["areas"].append(area)
 
-                valid_indices = [i for i, n in enumerate(history["names"]) if n == final_name]
 
-                if valid_indices:
-                    best_idx = max(valid_indices, key=lambda i: history["scores"][i])
-                    final_score = history["scores"][best_idx]
-                    final_face = history["faces"][best_idx]
-                    final_ref_img_id = history["ref_img_ids"][best_idx]
-
-                    start_idx = max(0, best_idx - half_clip)
-                    end_idx = min(len(history["frames"]), best_idx + half_clip)
-                    frames_to_save = list(history["frames"])[start_idx:end_idx]
-
-                    valid_entries = [
-                                        (i, name, score, face, ref_id, area, frame) 
-                                        for i, (name, score, face, ref_id, area, frame) in enumerate(zip(
-                                            history["names"], history["scores"], history["faces"], 
-                                            history["ref_img_ids"], history["areas"], history["frames"]
-                                        )) 
-                                            if area != 'OUT'
-                                        ]
-                    unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
-                    for area in unique_areas:
-                        if final_name == 'Unknown':
-                            final_name = final_name +' #' + str(obj)
-                        log_id = await save_detection_with_face(
-                            person=final_name,
-                            confidence=float(final_score),
-                            face_image=final_face,
-                            ref_img_id=final_ref_img_id,
-                            frames_to_save=frames_to_save, 
-                            face_to_save=history['faces'],
-                            area= area,
-                            save_video= False
-                        )
-                        if log_id is not None:
-                            asyncio.create_task(send_hossein())
+        disappeared_objs = set(track_history.keys()) - current_objs
         
-            del track_history[obj]
-            del try_objs[obj]
-    return data    
+        for obj in current_objs:
+            try_objs.pop(obj, None) 
 
+        for obj in disappeared_objs:
+            try_objs[obj] = try_objs.get(obj, 0) + 1
+
+        
+        for obj, count in list(try_objs.items()):
+            if count > 70:
+                history = track_history[obj]
+                if history["names"]:
+                    name_counts = Counter(history["names"])
+                    final_name, count = name_counts.most_common(1)[0]
+
+                    valid_indices = [i for i, n in enumerate(history["names"]) if n == final_name]
+
+                    if valid_indices:
+                        best_idx = max(valid_indices, key=lambda i: history["scores"][i])
+                        final_score = history["scores"][best_idx]
+                        final_face = history["faces"][best_idx]
+                        final_ref_img_id = history["ref_img_ids"][best_idx]
+
+                        start_idx = max(0, best_idx - half_clip)
+                        end_idx = min(len(history["frames"]), best_idx + half_clip)
+                        frames_to_save = list(history["frames"])[start_idx:end_idx]
+
+                        valid_entries = [
+                                            (i, name, score, face, ref_id, area, frame) 
+                                            for i, (name, score, face, ref_id, area, frame) in enumerate(zip(
+                                                history["names"], history["scores"], history["faces"], 
+                                                history["ref_img_ids"], history["areas"], history["frames"]
+                                            )) 
+                                                if area != 'OUT'
+                                            ]
+                        unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
+                        for area in unique_areas:
+                            if final_name == 'Unknown':
+                                final_name = final_name +' #' + str(obj)
+                            log_id = await save_detection_with_face(
+                                person=final_name,
+                                confidence=float(final_score),
+                                face_image=final_face,
+                                ref_img_id=final_ref_img_id,
+                                frames_to_save=frames_to_save, 
+                                face_to_save=history['faces'],
+                                area= area,
+                                save_video= False
+                            )
+                            if log_id is not None:
+                                asyncio.create_task(send_hossein())
+            
+                del track_history[obj]
+                del try_objs[obj]
+        return data    
+    except Exception as e:
+        print('errroror process frame', e)
 
 async def broadcast_frame_to_camera(data: dict, cam_id: str):
     """Broadcast frame and metadata for specific camera"""
@@ -640,30 +641,44 @@ async def video_broadcaster():
     try_objs = {}
     sources = [
     # {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
+    {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": './video6.mp4'},
-    # {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
-    {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
+    # {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
     # {"type": "cv2", "src": 0},
-    {"type": "rtsp", "src": config.RTSP_URL}
+    # {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
     model = ModelManager()
     model.initialize()
  
+    cap = cv2.VideoCapture('./video6.mp4')
+                # cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    if not cap.isOpened():
+                raise RuntimeError(f"Cannot open camera ")
 
     while True:
-        # Yield control to event loop
-            await asyncio.sleep(0.001) 
-            cam_id, frame = next(gen) 
-            # data = model.FrameProcessing(frame, loaded_polygon_points)
-            data = await process_frame(model, loaded_polygon_points, frame, cam_id, loaded_polygon_points, try_objs, track_history)
-            
-            if manager.count > 0:
-                asyncio.create_task(broadcast_frame_to_camera(data, cam_id))
+        cap = cv2.VideoCapture('./video6.mp4')
+        print('start again')   
+        while True:
+            # Yield control to event loop
+                await asyncio.sleep(0.001) 
+                # cam_id, frame = next(gen) 
+                ret, frame = cap.read()
+                cam_id= '0'
+                if not ret :
+                    print ('no frame')
+                    cap.release()  # Release the current video
+                    break 
+                # data = model.FrameProcessing(frame, loaded_polygon_points)
+                data = await process_frame(model, loaded_polygon_points, frame, cam_id, loaded_polygon_points, try_objs, track_history)
+                
+                if manager.count > 0:
+                    asyncio.create_task(broadcast_frame_to_camera(data, cam_id))
 
 
 def save_disappeared_object(obj, history):
