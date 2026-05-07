@@ -83,7 +83,7 @@ def get_logs(
         .all()
     
     # Get all personnel for quick lookup
-    all_personnel = db.query(Personnel).all()
+    all_personnel = db.query(PersonnelDB).all()
     
     # Create a lookup dictionary: national_code -> personnel
     personnel_lookup = {p.national_code: p for p in all_personnel}
@@ -176,7 +176,7 @@ def get_illegal_access_logs(
     logs = query.limit(limit).all()
     
     # Get personnel for name lookup
-    all_personnel = db.query(Personnel).all()
+    all_personnel = db.query(PersonnelDB).all()
     personnel_lookup = {p.national_code: p for p in all_personnel}
     
     # Prepare response
@@ -717,7 +717,7 @@ async def export_logs_by_date_range(
     logs = query.all()
     
     # Get personnel lookup
-    all_personnel = db.query(Personnel).all()
+    all_personnel = db.query(PersonnelDB).all()
     personnel_lookup = {p.national_code: p for p in all_personnel}
     
     # Prepare export data
