@@ -83,7 +83,7 @@ def get_logs(
         .all()
     
     # Get all personnel for quick lookup
-    all_personnel = db.query(Personnel).all()
+    all_personnel = db.query(PersonnelDB).all()
     
     # Create a lookup dictionary: national_code -> personnel
     personnel_lookup = {p.national_code: p for p in all_personnel}
@@ -123,99 +123,99 @@ def get_logs(
     return result
 
 
-@router.get("/illegal-access")
-def get_illegal_access_logs(
-    request : Request,
-    date: Optional[datetime] = Query(None, description="Filter by specific date (YYYY-MM-DD)"),
-    from_date: Optional[datetime] = Query(None, description="Start date range"),
-    to_date: Optional[datetime] = Query(None, description="End date range"),
-    limit: int = Query(100, ge=1, le=1000),
-    db: Session = Depends(get_db)
-):
-    """
-    Get detection logs where access was denied (illegal entrance attempts)
-    Can filter by:
-    - Specific date
-    - Date range (from_date to to_date)
-    """
+# @router.get("/illegal-access")
+# def get_illegal_access_logs(
+#     request : Request,
+#     date: Optional[datetime] = Query(None, description="Filter by specific date (YYYY-MM-DD)"),
+#     from_date: Optional[datetime] = Query(None, description="Start date range"),
+#     to_date: Optional[datetime] = Query(None, description="End date range"),
+#     limit: int = Query(100, ge=1, le=1000),
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     Get detection logs where access was denied (illegal entrance attempts)
+#     Can filter by:
+#     - Specific date
+#     - Date range (from_date to to_date)
+#     """
     
-    # Build query for denied access only
-    query = db.query(DetectionLog).filter(
-        DetectionLog.access_granted == False
-    )
+#     # Build query for denied access only
+#     query = db.query(DetectionLog).filter(
+#         DetectionLog.access_granted == False
+#     )
     
-    # Apply date filters
-    if date:
-        # Filter by specific date
-        start_of_day = datetime.combine(date.date(), datetime.min.time())
-        end_of_day = datetime.combine(date.date(), datetime.max.time())
-        query = query.filter(
-            DetectionLog.detection_time >= start_of_day,
-            DetectionLog.detection_time <= end_of_day
-        )
-    elif from_date and to_date:
-        # Filter by date range
-        query = query.filter(
-            DetectionLog.detection_time >= from_date,
-            DetectionLog.detection_time <= to_date
-        )
-    elif from_date:
-        # Filter from date to now
-        query = query.filter(DetectionLog.detection_time >= from_date)
-    elif to_date:
-        # Filter up to date
-        query = query.filter(DetectionLog.detection_time <= to_date)
+#     # Apply date filters
+#     if date:
+#         # Filter by specific date
+#         start_of_day = datetime.combine(date.date(), datetime.min.time())
+#         end_of_day = datetime.combine(date.date(), datetime.max.time())
+#         query = query.filter(
+#             DetectionLog.detection_time >= start_of_day,
+#             DetectionLog.detection_time <= end_of_day
+#         )
+#     elif from_date and to_date:
+#         # Filter by date range
+#         query = query.filter(
+#             DetectionLog.detection_time >= from_date,
+#             DetectionLog.detection_time <= to_date
+#         )
+#     elif from_date:
+#         # Filter from date to now
+#         query = query.filter(DetectionLog.detection_time >= from_date)
+#     elif to_date:
+#         # Filter up to date
+#         query = query.filter(DetectionLog.detection_time <= to_date)
     
-    # Order by most recent first
-    query = query.order_by(DetectionLog.detection_time.desc())
+#     # Order by most recent first
+#     query = query.order_by(DetectionLog.detection_time.desc())
     
-    # Get total count before pagination
-    total_count = query.count()
+#     # Get total count before pagination
+#     total_count = query.count()
     
-    # Apply limit
-    logs = query.limit(limit).all()
+#     # Apply limit
+#     logs = query.limit(limit).all()
     
-    # Get personnel for name lookup
-    all_personnel = db.query(Personnel).all()
-    personnel_lookup = {p.national_code: p for p in all_personnel}
+#     # Get personnel for name lookup
+#     all_personnel = db.query(PersonnelDB).all()
+#     personnel_lookup = {p.national_code: p for p in all_personnel}
     
-    # Prepare response
-    result = []
-    for log in logs:
-        personnel = personnel_lookup.get(log.person)
+#     # Prepare response
+#     result = []
+#     for log in logs:
+#         personnel = personnel_lookup.get(log.person)
         
-        result.append({
-            "id": log.id,
-            "person": {
-                "national_code": log.person,
-                "name": f"{personnel.fname} {personnel.lname}".strip() if personnel else "Unknown",
-                "fname": personnel.fname if personnel else None,
-                "lname": personnel.lname if personnel else None
-            } if personnel else {
-                "national_code": log.person,
-                "name": log.person,
-                "fname": None,
-                "lname": None
-            },
-            "access_granted": log.access_granted,  # ← ADD THIS FIELD
-            "area": log.area,
-            "confidence": log.confidence,
-            "detection_time": log.detection_time,
-            "room_id": log.room_id,
-            "room": log.room.room_name if log.room else None,
-            "face_image_url": get_face_image_url(request, log.id) if log.face_image_path else None,
-            "video_url": get_video_url(request, log.id) if log.video_path else None
-        })
+#         result.append({
+#             "id": log.id,
+#             "person": {
+#                 "national_code": log.person,
+#                 "name": f"{personnel.fname} {personnel.lname}".strip() if personnel else "Unknown",
+#                 "fname": personnel.fname if personnel else None,
+#                 "lname": personnel.lname if personnel else None
+#             } if personnel else {
+#                 "national_code": log.person,
+#                 "name": log.person,
+#                 "fname": None,
+#                 "lname": None
+#             },
+#             "access_granted": log.access_granted,  # ← ADD THIS FIELD
+#             "area": log.area,
+#             "confidence": log.confidence,
+#             "detection_time": log.detection_time,
+#             "room_id": log.room_id,
+#             "room": log.room.room_name if log.room else None,
+#             "face_image_url": get_face_image_url(request, log.id) if log.face_image_path else None,
+#             "video_url": get_video_url(request, log.id) if log.video_path else None
+#         })
     
-    return {
-        "total_illegal_attempts": total_count,
-        "date_filter": {
-            "date": date.isoformat() if date else None,
-            "from_date": from_date.isoformat() if from_date else None,
-            "to_date": to_date.isoformat() if to_date else None
-        },
-        "logs": result
-    }
+#     return {
+#         "total_illegal_attempts": total_count,
+#         "date_filter": {
+#             "date": date.isoformat() if date else None,
+#             "from_date": from_date.isoformat() if from_date else None,
+#             "to_date": to_date.isoformat() if to_date else None
+#         },
+#         "logs": result
+#     }
 
 
 
@@ -717,7 +717,7 @@ async def export_logs_by_date_range(
     logs = query.all()
     
     # Get personnel lookup
-    all_personnel = db.query(Personnel).all()
+    all_personnel = db.query(PersonnelDB).all()
     personnel_lookup = {p.national_code: p for p in all_personnel}
     
     # Prepare export data

@@ -485,7 +485,7 @@ def frame_generator(sources):
 
         if cam["type"] == "cv2":
             cap = cam["reader"]
-            cap.grab()
+            # cap.grab()
             ret, frame = cap.read()
             if not ret:
                 cam_index = (cam_index + 1) % num_cams
@@ -799,12 +799,17 @@ async def video_broadcaster():
     # {"type": "rtsp", "src": "rtsp://admin:pMc_897OmId@192.168.110.29:554/Streaming/Channels/101"},
     # {"type": "rtsp", "src": "rtsp://admin:pMc_897OmId@192.168.110.28:554/Streaming/Channels/101"},
     # {"type": "cv2", "src": 0},
-    {"type": "rtsp", "src": config.RTSP_URL}
+    # {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator_batch(sources)
     model = ModelManager()
     model.initialize()
  
+    cap = cv2.VideoCapture('./video6.mp4')
+                # cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    if not cap.isOpened():
+                raise RuntimeError(f"Cannot open camera ")
 
     while True:
         # Yield control to event loop

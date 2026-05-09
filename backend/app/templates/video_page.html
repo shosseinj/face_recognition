@@ -203,7 +203,12 @@
       </div>
 
       <div style="flex: 1">
-        <h3>Recent Detections (50) <span style="font-size: 12px">(Click on any entry to view video)</span></h3>
+        <h3>
+          Recent Detections (50)
+          <span style="font-size: 12px"
+            >(Click on any entry to view video)</span
+          >
+        </h3>
         <div id="logs-container"></div>
       </div>
     </div>
@@ -226,7 +231,7 @@
 
     <script>
       console.log(" location.host", location.host);
-      const ws = new WebSocket("ws://127.0.0.1:9000/ws/1");
+      const ws = new WebSocket("ws://127.0.0.1:8000/ws/0");
       ws.binaryType = "blob";
 
       const logsContainer = document.getElementById("logs-container");
@@ -312,7 +317,9 @@
 
         modalVideo.play().catch((e) => {
           console.error("Error playing video:", e);
-          alert("Could not play video. The video file might not be accessible.");
+          alert(
+            "Could not play video. The video file might not be accessible.",
+          );
         });
       }
 
@@ -348,10 +355,13 @@
           currentDetections = data.detection;
 
           // Update the logs display
-          logsContainer.innerHTML = data.detection.map((log) => formatLogEntry(log)).join("");
+          logsContainer.innerHTML = data.detection
+            .map((log) => formatLogEntry(log))
+            .join("");
         } else if (data.type === "video_metadata") {
           if (data.persons?.length) {
-            metadataDiv.innerHTML = "<b>Detected:</b> " + data.persons.join(", ");
+            metadataDiv.innerHTML =
+              "<b>Detected:</b> " + data.persons.join(", ");
           } else {
             metadataDiv.innerHTML = "No faces";
           }
