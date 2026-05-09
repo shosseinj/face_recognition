@@ -506,6 +506,186 @@ def frame_generator(sources):
         yield cam_index, frame
 
         cam_index = (cam_index + 1) % num_cams
+        
+def frame_generator_batch(sources, batch_size=None):
+    """
+    Collects exactly ONE frame from each camera to form a batch.
+    """
+    cameras = []
+    
+    print(f"\n{'='*60}")
+    print(f"DEBUG: Initializing frame generator with {len(sources)} source(s)")
+    print(f"{'='*60}")
+    
+    # Open all cameras
+    for i, cam in enumerate(sources):
+        print(f"\n--- Opening source {i} ---")
+        print(f"  Type: {cam.get('type')}")
+        print(f"  Source: {cam.get('src')}")
+        
+        if cam["type"] == "cv2":
+            src = cam["src"]
+            
+            # Check if file exists
+            import os
+            if isinstance(src, str) and src.endswith('.mp4'):
+                abs_path = os.path.abspath(src)
+                print(f"  Looking for file: {abs_path}")
+                
+                if os.path.exists(src):
+                    print(f"  ✓ File exists: {src}")
+                    file_size = os.path.getsize(src) / (1024 * 1024)
+                    print(f"    Size: {file_size:.2f} MB")
+                else:
+                    print(f"  ✗ File NOT FOUND: {src}")
+                    print(f"    Current working directory: {os.getcwd()}")
+                    print(f"    Available MP4 files:")
+                    for f in os.listdir('.'):
+                        if f.endswith('.mp4'):
+                            print(f"      - {f}")
+                    raise FileNotFoundError(f"Video file not found: {src}")
+            
+            # Try to open with OpenCV
+            print(f"  Attempting to open with OpenCV...")
+            cap = cv2.VideoCapture(src)
+            
+            if not cap.isOpened():
+                print(f"  ✗ FAILED to open source: {src}")
+                # Try alternative backend on Windows
+                print(f"  Trying with CAP_DSHOW backend...")
+                cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                if not cap.isOpened():
+                    raise RuntimeError(f"Cannot open source {src}")
+            
+            print(f"  ✓ SUCCESSfully opened source")
+            
+            # Get video properties
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            
+            print(f"  Properties:")
+            print(f"    - FPS: {fps}")
+            print(f"    - Resolution: {width}x{height}")
+            print(f"    - Total frames: {total_frames}")
+            
+            cameras.append({
+                "type": "cv2",
+                "reader": cap,
+                "cam_id": i,
+                "src": src,
+                "frame_count": 0,
+                "fail_count": 0
+            })
+            
+        elif cam["type"] == "rtsp":
+            print(f"  Opening RTSP stream: {cam['src']}")
+            try:
+                container = av.open(
+                    cam["src"],
+                    options={
+                        "rtsp_transport": "tcp",
+                        "flags": "low_delay",
+                        "fflags": "nobuffer"
+                    }
+                )
+                cameras.append({
+                    "type": "rtsp",
+                    "reader": container.decode(video=0),
+                    "cam_id": i,
+                    "src": cam["src"],
+                    "frame_count": 0,
+                    "fail_count": 0
+                })
+                print(f"  ✓ RTSP stream opened")
+            except Exception as e:
+                print(f"  ✗ Failed to open RTSP: {e}")
+                raise
+    
+    print(f"\n{'='*60}")
+    print(f"✓ Successfully initialized {len(cameras)} camera(s)")
+    print(f"{'='*60}\n")
+    
+    num_cams = len(cameras)
+    frame_generation_count = 0
+    
+    while True:
+        frame_generation_count += 1
+        batch_frames = []
+        batch_camera_ids = []
+        
+        # Collect exactly ONE frame from each camera
+        for cam in cameras:
+            frame = None
+            max_retries = 3
+            
+            # For video files, check if we need to loop
+            if isinstance(cam.get('src'), str) and cam['src'].endswith('.mp4'):
+                current_frame = cam["reader"].get(cv2.CAP_PROP_POS_FRAMES)
+                total_frames = cam["reader"].get(cv2.CAP_PROP_FRAME_COUNT)
+                
+                if current_frame >= total_frames - 1:
+                    print(f"  Video {cam['src']} reached end (frame {current_frame}/{total_frames}), restarting...")
+                    cam["reader"].set(cv2.CAP_PROP_POS_FRAMES, 0)
+            
+            # Try to get a valid frame
+            for attempt in range(max_retries):
+                if cam["type"] == "cv2":
+                    cap = cam["reader"]
+                    ret, frame = cap.read()
+                    
+                    if not ret or frame is None:
+                        cam['fail_count'] += 1
+                        if attempt == max_retries - 1:
+                            print(f"  ⚠️ Camera {cam['cam_id']} (src={cam['src']}): Failed after {max_retries} attempts")
+                            print(f"     Total frames read: {cam['frame_count']}, Failures: {cam['fail_count']}")
+                        continue
+                    else:
+                        cam['frame_count'] += 1
+                        break
+                        
+                elif cam["type"] == "rtsp":
+                    try:
+                        frame = next(cam["reader"])
+                        frame = frame.to_ndarray(format="bgr24")
+                        cam['frame_count'] += 1
+                        break
+                    except StopIteration:
+                        cam['fail_count'] += 1
+                        continue
+            
+            if frame is not None:
+                batch_frames.append(frame)
+                batch_camera_ids.append(cam["cam_id"])
+                
+                # Log every 100 frames
+                if cam['frame_count'] % 100 == 0:
+                    print(f"  Camera {cam['cam_id']}: Read {cam['frame_count']} frames successfully")
+                    
+            else:
+                print(f"  ✗ ERROR: Could not read from camera {cam['cam_id']} after {max_retries} attempts")
+                print(f"     Source: {cam.get('src')}")
+                # Use blank frame
+                blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(blank_frame, f"Camera {cam['cam_id']} - NO SIGNAL", (50, 240), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                batch_frames.append(blank_frame)
+                batch_camera_ids.append(cam["cam_id"])
+        
+        # Log batch info occasionally
+        if frame_generation_count % 50 == 0:
+            print(f"Batch {frame_generation_count}: Generated {len(batch_frames)} frames")
+        
+        # Yield batch
+        batch_indices = list(range(len(batch_frames)))
+        yield batch_frames, batch_camera_ids, batch_indices
+        
+        # Small delay to prevent excessive CPU usage
+        import time
+        time.sleep(0.01)
+
+
 
 import json
 
@@ -641,15 +821,17 @@ async def video_broadcaster():
     try_objs = {}
     sources = [
     # {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
-    {"type": "cv2", "src": './video6.mp4'},
-    # {"type": "cv2", "src": './video6.mp4'},
+    # {"type": "cv2", "src": './video8.mp4'},
     # {"type": "cv2", "src": 0},
+    # {"type": "cv2", "src": './video7.mp4'},
+    # {"type": "cv2", "src": './video7.mp4'},
+    # {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
     # {"type": "cv2", "src": 0},
-    # {"type": "rtsp", "src": config.RTSP_URL}
+    {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator(sources)
     model = ModelManager()

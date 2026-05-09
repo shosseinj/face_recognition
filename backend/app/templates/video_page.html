@@ -3,7 +3,6 @@
   <head>
     <meta charset="UTF-8" />
     <title>Face Recognition</title>
-
     <style>
       body {
         margin: 0;
@@ -27,6 +26,7 @@
         border: 2px solid #ccc;
         border-radius: 5px;
         background: black;
+        object-fit: contain;
       }
 
       #metadata {
@@ -126,6 +126,26 @@
         cursor: pointer;
       }
 
+      .status-badge {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 8px;
+      }
+      
+      .status-connected {
+        background-color: #4caf50;
+      }
+      
+      .status-disconnected {
+        background-color: #f44336;
+      }
+      
+      .status-connecting {
+        background-color: #ff9800;
+      }
+
       /* modal for images */
       .modal {
         display: none;
@@ -189,6 +209,35 @@
         font-size: 30px;
         cursor: pointer;
       }
+      
+      .controls {
+        margin-bottom: 20px;
+        padding: 10px;
+        background: #f0f0f0;
+        border-radius: 5px;
+      }
+      
+      button {
+        padding: 8px 16px;
+        margin-right: 10px;
+        cursor: pointer;
+        background: #4caf50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+      }
+      
+      button:hover {
+        background: #45a049;
+      }
+      
+      button.disconnect {
+        background: #f44336;
+      }
+      
+      button.disconnect:hover {
+        background: #da190b;
+      }
     </style>
   </head>
 
@@ -199,7 +248,10 @@
       <div id="video-section">
         <h3>Live Video</h3>
         <img id="v" />
-        <div id="metadata">Connecting...</div>
+        <div id="metadata">
+          <span class="status-badge status-disconnected" id="statusBadge"></span>
+          <span id="statusText">Disconnected</span>
+        </div>
       </div>
 
       <div style="flex: 1">
@@ -230,10 +282,126 @@
     </div>
 
     <script>
-      console.log(" location.host", location.host);
-      const ws = new WebSocket("ws://127.0.0.1:8000/ws/0");
-      ws.binaryType = "blob";
-
+      // Use the current host instead of hardcoded 127.0.0.1
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.host;
+      const wsUrl = `${protocol}//${host}/ws/0`;
+      
+      console.log("Connecting to WebSocket:", wsUrl);
+      console.log("Current location:", window.location.href);
+      
+      let ws = null;
+      let reconnectAttempts = 0;
+      const maxReconnectAttempts = 5;
+      
+      function connectWebSocket() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          console.log("WebSocket already connected");
+          return;
+        }
+        
+        updateStatus('connecting', 'Connecting...');
+        
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = "blob";
+        
+        ws.onopen = () => {
+          console.log("✅ WebSocket connected");
+          updateStatus('connected', 'Connected');
+          reconnectAttempts = 0;
+        };
+        
+        ws.onclose = () => {
+          console.log("❌ WebSocket disconnected");
+          updateStatus('disconnected', 'Disconnected');
+          
+          // Attempt to reconnect
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++;
+            console.log(`Reconnecting in 3 seconds... (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+            setTimeout(connectWebSocket, 3000);
+          } else {
+            console.log("Max reconnection attempts reached");
+            updateStatus('disconnected', 'Disconnected (failed to reconnect)');
+          }
+        };
+        
+        ws.onerror = (error) => {
+          console.error("WebSocket error:", error);
+          updateStatus('disconnected', 'Error');
+        };
+        
+        ws.onmessage = (e) => {
+          // VIDEO FRAME
+          if (e.data instanceof Blob) {
+            const imgElement = document.getElementById("v");
+            const url = URL.createObjectURL(e.data);
+            imgElement.onload = () => URL.revokeObjectURL(url);
+            imgElement.src = url;
+            return;
+          }
+          
+          // JSON DATA
+          try {
+            const data = JSON.parse(e.data);
+            console.log("Received data:", data.type);
+            
+            if (data.type === "new_detection") {
+              // Update the logs display
+              logsContainer.innerHTML = data.detection
+                .map((log) => formatLogEntry(log))
+                .join("");
+            } else if (data.type === "video_metadata") {
+              if (data.persons && data.persons.length) {
+                metadataDiv.innerHTML = `
+                  <span class="status-badge status-connected"></span>
+                  <span>Connected - Detected: ${data.persons.join(", ")}</span>
+                `;
+              } else {
+                metadataDiv.innerHTML = `
+                  <span class="status-badge status-connected"></span>
+                  <span>Connected - No faces detected</span>
+                `;
+              }
+            } else if (data.type === "error") {
+              console.error("Server error:", data.message);
+              metadataDiv.innerHTML = `
+                <span class="status-badge status-disconnected"></span>
+                <span>Error: ${data.message}</span>
+              `;
+            }
+          } catch (error) {
+            console.error("Error parsing JSON:", error);
+          }
+        };
+      }
+      
+      function updateStatus(status, text) {
+        const statusBadge = document.getElementById("statusBadge");
+        const statusText = document.getElementById("statusText");
+        
+        statusBadge.className = `status-badge status-${status}`;
+        statusText.textContent = text;
+        
+        metadataDiv.innerHTML = `
+          <span class="status-badge status-${status}"></span>
+          <span>${text}</span>
+        `;
+      }
+      
+      function disconnectWebSocket() {
+        if (ws) {
+          ws.close();
+          ws = null;
+        }
+        updateStatus('disconnected', 'Disconnected');
+      }
+      
+      function reconnectWebSocket() {
+        disconnectWebSocket();
+        setTimeout(connectWebSocket, 1000);
+      }
+      
       const logsContainer = document.getElementById("logs-container");
       const metadataDiv = document.getElementById("metadata");
       const imageModal = document.getElementById("imageModal");
@@ -246,7 +414,6 @@
 
       function formatLogEntry(log) {
         let imageHtml = "";
-        debugger;
         if (log.face_image_base64) {
           imageHtml = `<img class="face-image"
                         src="data:image/jpeg;base64,${log.face_image_base64}"
@@ -256,7 +423,7 @@
         }
 
         // Use full_name if available, otherwise fall back to person (national code)
-        const displayName = log.full_name || log.person;
+        const displayName = log.full_name || log.person || 'Unknown';
 
         // Add video indicator if video URL exists
         let videoIndicator = "";
@@ -273,7 +440,7 @@
             ${imageHtml}
             <div style="flex:1;">
                 <div style="display: flex; align-items: center;">
-                    <div class="person-name">${displayName}</div>
+                    <div class="person-name">${escapeHtml(displayName)}</div>
                     ${videoIndicator}
                 </div>
                 <div class="confidence">
@@ -282,7 +449,13 @@
                 <div class="timestamp">${date} ${time}</div>
             </div>
         </div>
-    `;
+        `;
+      }
+      
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
       }
 
       function showImage(src) {
@@ -293,6 +466,7 @@
       function closeImageModal() {
         imageModal.style.display = "none";
       }
+      
       function playVideo(videoUrl, personName, detectionTime) {
         console.log("Attempting to play video:", videoUrl);
 
@@ -305,7 +479,7 @@
         const d = new Date(detectionTime);
         const formattedTime = d.toLocaleString();
 
-        videoInfo.innerHTML = `${personName} - ${formattedTime}`;
+        videoInfo.innerHTML = `${escapeHtml(personName)} - ${formattedTime}`;
 
         // Set the video source
         const videoSource = document.getElementById("videoSource");
@@ -332,44 +506,6 @@
         modalVideo.load(); // Reload to clear
       }
 
-      ws.onopen = () => (metadataDiv.innerHTML = "✅ Connected");
-      ws.onclose = () => (metadataDiv.innerHTML = "❌ Disconnected");
-      ws.onerror = () => (metadataDiv.innerHTML = "❌ Error");
-
-      ws.onmessage = (e) => {
-        // =============================
-        // VIDEO FRAME
-        // =============================
-        if (e.data instanceof Blob) {
-          document.getElementById("v").src = URL.createObjectURL(e.data);
-          return;
-        }
-
-        // =============================
-        // JSON DATA
-        // =============================
-        const data = JSON.parse(e.data);
-
-        if (data.type === "new_detection") {
-          // Store current detections
-          currentDetections = data.detection;
-
-          // Update the logs display
-          logsContainer.innerHTML = data.detection
-            .map((log) => formatLogEntry(log))
-            .join("");
-        } else if (data.type === "video_metadata") {
-          if (data.persons?.length) {
-            metadataDiv.innerHTML =
-              "<b>Detected:</b> " + data.persons.join(", ");
-          } else {
-            metadataDiv.innerHTML = "No faces";
-          }
-        } else if (data.type === "error") {
-          metadataDiv.innerHTML = "Error: " + data.message;
-        }
-      };
-
       // Close modals when clicking outside
       imageModal.onclick = (e) => {
         if (e.target === imageModal) closeImageModal();
@@ -391,6 +527,9 @@
       modalVideo.onclick = (e) => {
         e.stopPropagation();
       };
+      
+      // Auto-connect when page loads
+      connectWebSocket();
     </script>
   </body>
 </html>
