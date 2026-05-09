@@ -169,28 +169,49 @@ class WebSocketManager:
                     del self.active_connections[camera_id]
         print(f"❌ Client disconnected. Total: {len(self.all_connections)}")
     
-    async def broadcast_to_camera(self, camera_id: str, frame_bytes: bytes, metadata: dict):
+    async def broadcast_to_camera(self,  datas: dict , batch_camera_id: list):
         """Broadcast to clients subscribed to specific camera"""
-        if camera_id not in self.active_connections:
-            return
-        
-        disconnected = []
-        connections = list(self.active_connections[camera_id])
-        
-        # Send frame and metadata
-        for connection in connections:
-            try:
-                await connection.send_bytes(frame_bytes)
-                await connection.send_json(metadata)
-            except Exception:
-                disconnected.append(connection)
-        
-        # Cleanup disconnected clients
-        if disconnected:
-            async with self._lock:
-                for conn in disconnected:
-                    self.active_connections[camera_id].discard(conn)
-                    self.all_connections.discard(conn)
+        batch_frame = datas['frames']
+        batch_persons = datas['persons']
+        batch_scores = datas['scores']
+        for n, (frame, persons, scores, camera_id) in enumerate(zip(batch_frame, batch_persons, batch_scores, batch_camera_id)):
+            camera_id = str(camera_id)
+            success, encoded_frame = cv2.imencode('.jpg', frame, 
+                                                [cv2.IMWRITE_JPEG_QUALITY, 85])
+            
+            if not success:
+                return
+            
+            frame_bytes = encoded_frame.tobytes()
+            metadata = {
+                "type": "video_metadata",
+                "cam_id": camera_id,
+                "persons": persons,
+                "scores": [float(s) if s is not None else 0.0 for s in scores],
+                # "objs": datas['objs'],
+                "timestamp": time.time()
+            }
+
+            if camera_id not in self.active_connections:
+                return
+            
+            disconnected = []
+            connections = list(self.active_connections[camera_id])
+            
+            # Send frame and metadata
+            for connection in connections:
+                try:
+                    await connection.send_bytes(frame_bytes)
+                    await connection.send_json(metadata)
+                except Exception:
+                    disconnected.append(connection)
+            
+            # Cleanup disconnected clients
+            if disconnected:
+                async with self._lock:
+                    for conn in disconnected:
+                        self.active_connections[camera_id].discard(conn)
+                        self.all_connections.discard(conn)
     
     @property
     def count(self) -> int:
@@ -304,33 +325,6 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
         await manager.disconnect(websocket)
 
 
-# @app.websocket("/ws/video")
-# async def video_ws(websocket: WebSocket):
-#     await manager.connect(websocket)
-#     try:
-#         await send_hossein()
-#     except Exception as e:
-#         print(f"⚠️ Error sending initial logs: {e}")
-
-#     try:
-#         while True:
-#             try:
-#                 data = await asyncio.wait_for(
-#                     websocket.receive_text(), 
-#                     timeout=30.0
-#                 )
-#                 # Process messages...
-#             except asyncio.TimeoutError:
-#                 await websocket.send_json({"type": "ping"})
-#                 continue
-#     except WebSocketDisconnect:
-#         await manager.disconnect(websocket)  # ✅ Add await
-#     except Exception as e:
-#         print(f"Error: {e}")
-#         await manager.disconnect(websocket)  # ✅ Add await
-
-
-
 
 # Global state
 processor_task: Optional[asyncio.Task] = None
@@ -410,10 +404,13 @@ async def send_hossein():
                 else:
                     full_name = person_value
             if log.area:
-                full_name = full_name + ' - '+ log.area
+                area =  log.area
+            else:
+                area = 'بدون ناحیه'
             
             logs_data.append({
                 "id": log.id,
+                "area": area,
                 "person": log.person,  # National code
                 "full_name": full_name,  # Full name if found, else None
                 "confidence": float(log.confidence) if log.confidence is not None else 0.0,
@@ -506,112 +503,52 @@ def frame_generator(sources):
         yield cam_index, frame
 
         cam_index = (cam_index + 1) % num_cams
-        
 def frame_generator_batch(sources, batch_size=None):
     """
     Collects exactly ONE frame from each camera to form a batch.
+    
+    Args:
+        sources: list like [{"type": "cv2", "src": 0}, {"type": "rtsp", "src": "..."}]
+        batch_size: ignored (kept for compatibility), always uses number of cameras
+    
+    Yields:
+        (batch_frames, batch_camera_ids, batch_indices)
+        - batch_frames: list of frames [frame_cam0, frame_cam1, frame_cam2, ...]
+        - batch_camera_ids: list of camera IDs [0, 1, 2, ...]
+        - batch_indices: list of indices [0, 1, 2, ...]
     """
     cameras = []
     
-    print(f"\n{'='*60}")
-    print(f"DEBUG: Initializing frame generator with {len(sources)} source(s)")
-    print(f"{'='*60}")
-    
     # Open all cameras
     for i, cam in enumerate(sources):
-        print(f"\n--- Opening source {i} ---")
-        print(f"  Type: {cam.get('type')}")
-        print(f"  Source: {cam.get('src')}")
-        
         if cam["type"] == "cv2":
-            src = cam["src"]
-            
-            # Check if file exists
-            import os
-            if isinstance(src, str) and src.endswith('.mp4'):
-                abs_path = os.path.abspath(src)
-                print(f"  Looking for file: {abs_path}")
-                
-                if os.path.exists(src):
-                    print(f"  ✓ File exists: {src}")
-                    file_size = os.path.getsize(src) / (1024 * 1024)
-                    print(f"    Size: {file_size:.2f} MB")
-                else:
-                    print(f"  ✗ File NOT FOUND: {src}")
-                    print(f"    Current working directory: {os.getcwd()}")
-                    print(f"    Available MP4 files:")
-                    for f in os.listdir('.'):
-                        if f.endswith('.mp4'):
-                            print(f"      - {f}")
-                    raise FileNotFoundError(f"Video file not found: {src}")
-            
-            # Try to open with OpenCV
-            print(f"  Attempting to open with OpenCV...")
-            cap = cv2.VideoCapture(src)
-            
+            cap = cv2.VideoCapture(cam["src"])
             if not cap.isOpened():
-                print(f"  ✗ FAILED to open source: {src}")
-                # Try alternative backend on Windows
-                print(f"  Trying with CAP_DSHOW backend...")
-                cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
-                if not cap.isOpened():
-                    raise RuntimeError(f"Cannot open source {src}")
-            
-            print(f"  ✓ SUCCESSfully opened source")
-            
-            # Get video properties
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-            
-            print(f"  Properties:")
-            print(f"    - FPS: {fps}")
-            print(f"    - Resolution: {width}x{height}")
-            print(f"    - Total frames: {total_frames}")
-            
+                raise RuntimeError(f"Cannot open camera {cam['src']}")
             cameras.append({
                 "type": "cv2",
                 "reader": cap,
-                "cam_id": i,
-                "src": src,
-                "frame_count": 0,
-                "fail_count": 0
+                "cam_id": i
             })
-            
         elif cam["type"] == "rtsp":
-            print(f"  Opening RTSP stream: {cam['src']}")
-            try:
-                container = av.open(
-                    cam["src"],
-                    options={
-                        "rtsp_transport": "tcp",
-                        "flags": "low_delay",
-                        "fflags": "nobuffer"
-                    }
-                )
-                cameras.append({
-                    "type": "rtsp",
-                    "reader": container.decode(video=0),
-                    "cam_id": i,
-                    "src": cam["src"],
-                    "frame_count": 0,
-                    "fail_count": 0
-                })
-                print(f"  ✓ RTSP stream opened")
-            except Exception as e:
-                print(f"  ✗ Failed to open RTSP: {e}")
-                raise
-    
-    print(f"\n{'='*60}")
-    print(f"✓ Successfully initialized {len(cameras)} camera(s)")
-    print(f"{'='*60}\n")
+            container = av.open(
+                cam["src"],
+                options={
+                    "rtsp_transport": "tcp",
+                    "flags": "low_delay",
+                    "fflags": "nobuffer"
+                }
+            )
+            cameras.append({
+                "type": "rtsp",
+                "reader": container.decode(video=0),
+                "cam_id": i
+            })
+            print(f"✅ Connected to RTSP {cam['src']}")
     
     num_cams = len(cameras)
-    frame_generation_count = 0
     
     while True:
-        frame_generation_count += 1
         batch_frames = []
         batch_camera_ids = []
         
@@ -620,194 +557,223 @@ def frame_generator_batch(sources, batch_size=None):
             frame = None
             max_retries = 3
             
-            # For video files, check if we need to loop
-            if isinstance(cam.get('src'), str) and cam['src'].endswith('.mp4'):
-                current_frame = cam["reader"].get(cv2.CAP_PROP_POS_FRAMES)
-                total_frames = cam["reader"].get(cv2.CAP_PROP_FRAME_COUNT)
-                
-                if current_frame >= total_frames - 1:
-                    print(f"  Video {cam['src']} reached end (frame {current_frame}/{total_frames}), restarting...")
-                    cam["reader"].set(cv2.CAP_PROP_POS_FRAMES, 0)
-            
-            # Try to get a valid frame
+            # Try to get a valid frame from this camera
             for attempt in range(max_retries):
                 if cam["type"] == "cv2":
                     cap = cam["reader"]
+                    cap.grab()
                     ret, frame = cap.read()
-                    
-                    if not ret or frame is None:
-                        cam['fail_count'] += 1
-                        if attempt == max_retries - 1:
-                            print(f"  ⚠️ Camera {cam['cam_id']} (src={cam['src']}): Failed after {max_retries} attempts")
-                            print(f"     Total frames read: {cam['frame_count']}, Failures: {cam['fail_count']}")
+                    if not ret:
                         continue
-                    else:
-                        cam['frame_count'] += 1
-                        break
-                        
                 elif cam["type"] == "rtsp":
                     try:
                         frame = next(cam["reader"])
                         frame = frame.to_ndarray(format="bgr24")
-                        cam['frame_count'] += 1
-                        break
                     except StopIteration:
-                        cam['fail_count'] += 1
                         continue
+                
+                if frame is not None:
+                    break
             
             if frame is not None:
                 batch_frames.append(frame)
                 batch_camera_ids.append(cam["cam_id"])
-                
-                # Log every 100 frames
-                if cam['frame_count'] % 100 == 0:
-                    print(f"  Camera {cam['cam_id']}: Read {cam['frame_count']} frames successfully")
-                    
             else:
-                print(f"  ✗ ERROR: Could not read from camera {cam['cam_id']} after {max_retries} attempts")
-                print(f"     Source: {cam.get('src')}")
-                # Use blank frame
+                # If camera fails, use a blank frame or skip?
+                print(f"⚠️ Warning: Could not read from camera {cam['cam_id']}")
+                # Option 1: Use blank frame
                 blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(blank_frame, f"Camera {cam['cam_id']} - NO SIGNAL", (50, 240), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
                 batch_frames.append(blank_frame)
                 batch_camera_ids.append(cam["cam_id"])
         
-        # Log batch info occasionally
-        if frame_generation_count % 50 == 0:
-            print(f"Batch {frame_generation_count}: Generated {len(batch_frames)} frames")
-        
-        # Yield batch
+        # Yield batch (size = number of cameras)
         batch_indices = list(range(len(batch_frames)))
         yield batch_frames, batch_camera_ids, batch_indices
-        
-        # Small delay to prevent excessive CPU usage
-        import time
-        time.sleep(0.01)
-
-
-
 import json
-
+def frame_generator_batch1(sources):
+    """
+    Use OpenCV for RTSP streams (more stable than PyAV)
+    """
+    cameras = []
+    
+    for i, cam in enumerate(sources):
+        if cam["type"] == "cv2":
+            cap = cv2.VideoCapture(cam["src"])
+            if not cap.isOpened():
+                print(f"⚠️ Cannot open camera {cam['src']}")
+                continue
+            cameras.append({
+                "type": "cv2",
+                "reader": cap,
+                "cam_id": i
+            })
+        elif cam["type"] == "rtsp":
+            try:
+                # Use OpenCV for RTSP with optimization flags
+                cap = cv2.VideoCapture(cam["src"], cv2.CAP_FFMPEG)
+                
+                # Set RTSP options
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap.set(cv2.CAP_PROP_FPS, 30)
+                cap.set(cv2.CAP_PROP_POS_MSEC, 0)
+                
+                if not cap.isOpened():
+                    print(f"⚠️ Cannot open RTSP {cam['src']}")
+                    continue
+                    
+                cameras.append({
+                    "type": "rtsp",
+                    "reader": cap,
+                    "cam_id": i
+                })
+                print(f"✅ Connected to RTSP {cam['src']} using OpenCV")
+            except Exception as e:
+                print(f"❌ Failed to connect to RTSP {cam['src']}: {e}")
+                continue
+    
+    while True:
+        batch_frames = []
+        batch_camera_ids = []
+        
+        for cam in cameras:
+            frame = None
+            max_retries = 3
+            
+            for attempt in range(max_retries):
+                try:
+                    cap = cam["reader"]
+                    ret, frame = cap.read()
+                    
+                    if not ret or frame is None:
+                        # Try to reconnect on failure
+                        if attempt == max_retries - 1:
+                            print(f"⚠️ Reconnecting camera {cam['cam_id']}...")
+                            cap.release()
+                            cap = cv2.VideoCapture(cam["src"], cv2.CAP_FFMPEG)
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                            cam["reader"] = cap
+                        continue
+                    
+                    break
+                except Exception as e:
+                    print(f"Error reading frame from camera {cam['cam_id']}: {e}")
+                    continue
+            
+            if frame is not None:
+                batch_frames.append(frame)
+                batch_camera_ids.append(cam["cam_id"])
+            else:
+                blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                batch_frames.append(blank_frame)
+                batch_camera_ids.append(cam["cam_id"])
+        
+        yield batch_frames, batch_camera_ids, list(range(len(batch_frames)))
 async def process_frame(model,loaded_polygon_points, frame, cam_id, polygon_points, try_objs, track_history):
     try:
-        clip_length = 100
-        half_clip = clip_length // 2
-        # data = {
-        #                         "frames": frame,
-        #                         "persons": [],
-        #                         "scores":[],
-        #                         "faces": [],
-        #                         "objs": [],
-        #                         "ref_img_ids": [],
-        #                         "area": [],
-        #                     }
-        data = model.FrameProcessing(frame, loaded_polygon_points)
-        data['cam_id'] = cam_id
-
-        persons = data['persons'] 
-        scores = data['scores']
+            clip_length = 100
+            half_clip = clip_length // 2
+            # data = {
+            #                         "frames": frame,
+            #                         "persons": [],
+            #                         "scores":[],
+            #                         "faces": [],
+            #                         "objs": [],
+            #                         "ref_img_ids": [],
+            #                         "area": [],
+            #                     }
+            # data['cam_id'] = cam_id
+            datas = model.FrameProcessing(frame, loaded_polygon_points)
         
-        faces = data['faces']
-        areas = data['area']
-        objs = data['objs']
-        ref_img_ids = data['ref_img_ids']
 
-        current_objs = set(objs)
-
-
-        for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
-            history = track_history[obj]
-            history["frames"].append(frame)
+            persons_batch = datas['persons'] 
+            scores_batch = datas['scores']
             
-            if person:
-                history["ref_img_ids"].append(ref_img_id)
-                history["names"].append(person)
-                history["scores"].append(score)
-                history["faces"].append(face)
-                history["areas"].append(area)
+            faces_batch = datas['faces']
+            areas_batch = datas['area']
+            objs_batch = datas['objs']
+            ref_img_ids_batch = datas['ref_img_ids']
+
+            for n, (persons, scores, faces, areas, objs, ref_img_ids) in enumerate(zip(persons_batch, scores_batch, faces_batch, areas_batch, objs_batch, ref_img_ids_batch)):
+
+                current_objs = set(objs)
 
 
-        disappeared_objs = set(track_history.keys()) - current_objs
-        
-        for obj in current_objs:
-            try_objs.pop(obj, None) 
+                for i, (person, score, obj, face, ref_img_id, area) in enumerate(zip(persons, scores, objs, faces, ref_img_ids, areas)):
+                    history = track_history[obj]
+                    history["frames"].append(frame)
+                    
+                    if person:
+                        history["ref_img_ids"].append(ref_img_id)
+                        history["names"].append(person)
+                        history["scores"].append(score)
+                        history["faces"].append(face)
+                        history["areas"].append(area)
 
-        for obj in disappeared_objs:
-            try_objs[obj] = try_objs.get(obj, 0) + 1
 
-        
-        for obj, count in list(try_objs.items()):
-            if count > 70:
-                history = track_history[obj]
-                if history["names"]:
-                    name_counts = Counter(history["names"])
-                    final_name, count = name_counts.most_common(1)[0]
+                disappeared_objs = set(track_history.keys()) - current_objs
+                
+                for obj in current_objs:
+                    try_objs.pop(obj, None) 
 
-                    valid_indices = [i for i, n in enumerate(history["names"]) if n == final_name]
+                for obj in disappeared_objs:
+                    try_objs[obj] = try_objs.get(obj, 0) + 1
 
-                    if valid_indices:
-                        best_idx = max(valid_indices, key=lambda i: history["scores"][i])
-                        final_score = history["scores"][best_idx]
-                        final_face = history["faces"][best_idx]
-                        final_ref_img_id = history["ref_img_ids"][best_idx]
+                
+                for obj, count in list(try_objs.items()):
+                    if count > 70:
+                        history = track_history[obj]
+                        if history["names"]:
+                            name_counts = Counter(history["names"])
+                            final_name, count = name_counts.most_common(1)[0]
 
-                        start_idx = max(0, best_idx - half_clip)
-                        end_idx = min(len(history["frames"]), best_idx + half_clip)
-                        frames_to_save = list(history["frames"])[start_idx:end_idx]
+                            valid_indices = [i for i, n in enumerate(history["names"]) if n == final_name]
 
-                        valid_entries = [
-                                            (i, name, score, face, ref_id, area, frame) 
-                                            for i, (name, score, face, ref_id, area, frame) in enumerate(zip(
-                                                history["names"], history["scores"], history["faces"], 
-                                                history["ref_img_ids"], history["areas"], history["frames"]
-                                            )) 
-                                                if area != 'OUT'
-                                            ]
-                        unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
-                        for area in unique_areas:
-                            if final_name == 'Unknown':
-                                final_name = final_name +' #' + str(obj)
-                            log_id = await save_detection_with_face(
-                                person=final_name,
-                                confidence=float(final_score),
-                                face_image=final_face,
-                                ref_img_id=final_ref_img_id,
-                                frames_to_save=frames_to_save, 
-                                face_to_save=history['faces'],
-                                area= area,
-                                save_video= False
-                            )
-                            if log_id is not None:
-                                asyncio.create_task(send_hossein())
-            
-                del track_history[obj]
-                del try_objs[obj]
-        return data    
+                            if valid_indices:
+                                best_idx = max(valid_indices, key=lambda i: history["scores"][i])
+                                final_score = history["scores"][best_idx]
+                                final_face = history["faces"][best_idx]
+                                final_ref_img_id = history["ref_img_ids"][best_idx]
+
+                                start_idx = max(0, best_idx - half_clip)
+                                end_idx = min(len(history["frames"]), best_idx + half_clip)
+                                frames_to_save = list(history["frames"])[start_idx:end_idx]
+
+                                valid_entries = [
+                                                    (i, name, score, face, ref_id, area, frame) 
+                                                    for i, (name, score, face, ref_id, area, frame) in enumerate(zip(
+                                                        history["names"], history["scores"], history["faces"], 
+                                                        history["ref_img_ids"], history["areas"], history["frames"]
+                                                    )) 
+                                                        if area != 'OUT'
+                                                    ]
+                                unique_areas = set(area for _, _, _, _, _, area, _ in valid_entries)
+                                for area in unique_areas:
+                                    if final_name == 'Unknown':
+                                        final_name = final_name +' #' + str(obj)
+                                    log_id = await save_detection_with_face(
+                                        person=final_name,
+                                        confidence=float(final_score),
+                                        face_image=final_face,
+                                        ref_img_id=final_ref_img_id,
+                                        frames_to_save=frames_to_save, 
+                                        face_to_save=history['faces'],
+                                        area= area,
+                                        save_video= False
+                                    )
+                                    if log_id is not None:
+                                        asyncio.create_task(send_hossein())
+                    
+                        del track_history[obj]
+                        del try_objs[obj]
+            return datas    
     except Exception as e:
-        print('errroror process frame', e)
+        print('error in process_frame', e)
 
-async def broadcast_frame_to_camera(data: dict, cam_id: str):
+async def broadcast_frame_to_camera(datas: dict, batch_cam_id: list):
     """Broadcast frame and metadata for specific camera"""
-    frame = data['frames']
-    
-    success, encoded_frame = cv2.imencode('.jpg', frame, 
-                                          [cv2.IMWRITE_JPEG_QUALITY, 85])
-    
-    if not success:
-        return
-    
-    frame_bytes = encoded_frame.tobytes()
-    metadata = {
-        "type": "video_metadata",
-        "cam_id": cam_id,
-        "persons": data['persons'],
-        "scores": [float(s) if s is not None else 0.0 for s in data['scores']],
-        "objs": data['objs'],
-        "timestamp": time.time()
-    }
-    
-    await manager.broadcast_to_camera(str(cam_id), frame_bytes, metadata)
+    await manager.broadcast_to_camera(datas, batch_cam_id)
+
+
 
 
 async def video_broadcaster():
@@ -822,18 +788,20 @@ async def video_broadcaster():
     sources = [
     # {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
     # {"type": "cv2", "src": './video8.mp4'},
-    # {"type": "cv2", "src": 0},
-    # {"type": "cv2", "src": './video7.mp4'},
-    # {"type": "cv2", "src": './video7.mp4'},
-    # {"type": "cv2", "src": './video6.mp4'},
+    {"type": "cv2", "src": 0},
+    {"type": "cv2", "src": './video7.mp4'},
+    {"type": "cv2", "src": './video7.mp4'},
+    {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
     # {"type": "rtsp", "src": "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"},
+    # {"type": "rtsp", "src": "rtsp://admin:pMc_897OmId@192.168.110.29:554/Streaming/Channels/101"},
+    # {"type": "rtsp", "src": "rtsp://admin:pMc_897OmId@192.168.110.28:554/Streaming/Channels/101"},
     # {"type": "cv2", "src": 0},
     {"type": "rtsp", "src": config.RTSP_URL}
 ]
-    gen = frame_generator(sources)
+    gen = frame_generator_batch(sources)
     model = ModelManager()
     model.initialize()
  
@@ -844,23 +812,15 @@ async def video_broadcaster():
                 raise RuntimeError(f"Cannot open camera ")
 
     while True:
-        cap = cv2.VideoCapture('./video6.mp4')
-        print('start again')   
-        while True:
-            # Yield control to event loop
-                await asyncio.sleep(0.001) 
-                # cam_id, frame = next(gen) 
-                ret, frame = cap.read()
-                cam_id= '0'
-                if not ret :
-                    print ('no frame')
-                    cap.release()  # Release the current video
-                    break 
-                # data = model.FrameProcessing(frame, loaded_polygon_points)
-                data = await process_frame(model, loaded_polygon_points, frame, cam_id, loaded_polygon_points, try_objs, track_history)
-                
-                if manager.count > 0:
-                    asyncio.create_task(broadcast_frame_to_camera(data, cam_id))
+        # Yield control to event loop
+            await asyncio.sleep(0.001) 
+            batch_frames, batch_camera_ids, batch_indices = next(gen) 
+          
+            data_list = await process_frame(model, loaded_polygon_points, batch_frames, batch_camera_ids, loaded_polygon_points, try_objs, track_history)
+            
+            if manager.count > 0:
+                # asyncio.create_task(broadcast_frame_to_camera(data, '0'))
+                asyncio.create_task(broadcast_frame_to_camera(data_list, batch_camera_ids))
 
 
 def save_disappeared_object(obj, history):

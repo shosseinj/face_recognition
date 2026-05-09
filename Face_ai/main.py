@@ -1,7 +1,7 @@
-from Face_ai.source.human_detection import tracking_human_detected
+from Face_ai.source.human_detection import tracking_human_detected, tracking_human_detected_batch
 import cv2
 import av
-from Face_ai.source.face_detection import faceDetection
+from Face_ai.source.face_detection import faceDetection, faceDetectionBatch
 from Face_ai.source.trt_manager import TensorRTManager
 from qdrant_client import QdrantClient
 from pathlib import Path
@@ -201,6 +201,7 @@ class ModelManager:
             self.current_dir = Path(__file__).parent / 'source/engines'
 
             self.trt_manager.initialize(
+                # det_engine_path = self.current_dir / "retinaface_mv2_dynamic.engine",
                 det_engine_path = self.current_dir / "retinaface_fp16.engine",
                 rec_engine_path = self.current_dir / "arcface_fp16.engine"
                 )
@@ -576,19 +577,11 @@ class ModelManager:
                 person= 'NoFace'       
 
 
-    
-
-
-
         for human_idx, (human_box, pose) in enumerate(zip(human_bbox, human_keypoints)):
 
             kpts = pose["kpts"]
 
             head_box = get_head_bbox(kpts)
-        
-            # cv2.rectangle(output_frame, (int(head_box[0] *scale_x),int(head_box[1] *scale_y)), (int(head_box[2] *scale_x), int(head_box[3]*scale_y)), get_color_from_id(human_idx), 8)
-            # if head_box is None:
-            #     continue
             
             x1, y1, x2, y2 = map(int, pose['bbox'][:4])
             x_h_anch = int((x1+x2)/2)
@@ -786,21 +779,347 @@ class ModelManager:
         # output_frame = cv2.resize(output_frame, (frontend_w, frontend_h))
         return output_frame , persons, scores, faces , objs, ref_img_ids, human_area, [scale_x, scale_y]
 
+    def draw_batch(self, frames, face_detection_results, human_detection_results, collocation, polygons):
+        """
+        Draw batch of frames with face and human detection results
+        
+        Args:
+            frames: List of frames
+            face_detection_results: List of face detection results per frame
+            human_detection_results: List of human detection results per frame
+            collocation: Face collection for recognition
+            polygons: Zone polygons
+        
+        Returns:
+            Tuple of (output_frames, all_persons, all_scores, all_faces, all_objs, all_ref_img_ids, all_human_areas, out_scales)
+        """
+        global face_human_tracker, frame_counter
+        
+        output_frames = []
+        all_persons = []
+        all_scores = []
+        all_faces = []
+        all_objs = []
+        all_ref_img_ids = []
+        all_human_areas = []
+        out_scales = []
+        
+        target_width = 640
+        target_height = 540
+        
+        for frame_idx, frame in enumerate(frames):
+            # Get results for this frame
+            face_results_frame = face_detection_results[frame_idx] if frame_idx < len(face_detection_results) else {'face_bbox': [], 'face_landmarks': []}
+            human_results_frame = human_detection_results[frame_idx] if frame_idx < len(human_detection_results) else {'tracked_bbox': [], 'detections': []}
+            
+            # Extract data
+            choose= 'bbox'
+  
+  
+            human_bbox = [tb[:4] for tb in human_results_frame]
+            human_scores = [tb[4] for tb in human_results_frame]
+            human_track_ids = [tb[5] for tb in human_results_frame]
+            human_keypoints = [tb[6] for tb in human_results_frame]
+           
+
+            # if 'detections' in human_results_frame:
+            #     human_bbox = [tb['bbox'] for tb in human_results_frame['detections']]
+            #     human_track_ids = [tb['track_id'] for tb in human_results_frame['detections']]
+            #     human_scores = [tb['score'] for tb in human_results_frame['detections']]
+            #     human_keypoints = [det['kpts'] for det in human_results_frame['detections']]
+           
+
+            face_bbox = face_results_frame.get('bbox_face', [])
+            face_landmarks = face_results_frame.get('landmarks', [])
+            
+            frame_counter += 1
+            
+            # =========================================================
+            # STEP 1: Face recognition (run once per face)
+            # =========================================================
+            face_results = {}
+            
+            h, w = frame.shape[:2]
+            scale_x = target_width / w
+            scale_y = target_height / h
+            
+            output_frame = cv2.resize(frame, (target_width, target_height))
+            
+            # Process faces
+            for face_idx, (face_box, landmark) in enumerate(zip(face_bbox, face_landmarks)):
+                x1 = max(0, min(int(face_box[0]), w - 1))
+                y1 = max(0, min(int(face_box[1]), h - 1))
+                x2 = max(0, min(int(face_box[2]), w - 1))
+                y2 = max(0, min(int(face_box[3]), h - 1))
+                
+                fixed_box = [x1, y1, x2, y2]
+                
+                # Get track_id if available
+                track_id = face_box[5] if len(face_box) > 5 else face_idx
+                
+                if len(landmark) >= 3:
+                    nose_x = landmark[2][0]
+                    nose_y = landmark[2][1]
+                    
+                    eye_nose_pts = [landmark[0], landmark[1]]
+                    xs = [p[0] for p in eye_nose_pts]
+                    ys = [p[1] for p in eye_nose_pts]
+                    
+                    min_x, max_x = min(xs), max(xs)
+                    min_y, max_y = min(ys), max(ys)
+                    
+                    margin_y = (max_y - min_y)/5
+                    margin_x = (max_x - min_x)/5
+                    front_view = ((min_x + margin_x <= nose_x <= max_x - margin_x) and 
+                                (min_y + margin_y < nose_y and nose_y >= max_y - margin_y))
+                else:
+                    front_view = True
+                
+                if front_view:
+                    hcolor = (255, 0, 0)
+                    x_anchor = int((x1 + x2)/2 * scale_x)
+                    y_anchor = int(y2 * scale_y)
+                    if x_anchor > 0 and y_anchor > 0:
+                        cv2.circle(output_frame, (x_anchor, y_anchor), 3, hcolor, 2)
+                else:
+                    hcolor = (0, 0, 255)
+                
+                # Draw landmarks
+                if len(landmark) > 0:
+                    for x, y in landmark:
+                        if x > 0 and y > 0:
+                            cv2.circle(output_frame, (int(x * scale_x), int(y * scale_y)), 3, hcolor, -1)
+                
+                if front_view:
+                    embedding, rec_score = self.face_embedding(frame, fixed_box, landmark)
+                    x1_f, y1_f, x2_f, y2_f = map(int, face_box[:4])
+                    if embedding is None:
+                        person = "Unknown"
+                        rec_score = 0.0
+                        ref_img_id = None
+                    else:
+                        person, rec_score, ref_img_id = self.face_decoding(embedding, collocation)
+                    
+                    if person == 'Unknown':
+                        rec_score = 0
+                        ref_img_id = None
+                    
+                    face_results[track_id] = {
+                        "box": [x1_f, y1_f, x2_f, y2_f],
+                        "person": person,
+                        "score": rec_score,
+                        'ref_img_id': ref_img_id,
+                        'track_id': track_id,
+                    }
+                else:
+                    person = 'NoFace'
+            
+            # Process humans
+            persons = []
+            scores = []
+            faces = []
+            objs = []
+            ref_img_ids = []
+            human_area = []
+            
+            for human_idx, (human_box, kpts, track_id, human_score) in enumerate(zip(human_bbox, human_keypoints, human_track_ids, human_scores)):
+                if len(kpts) == 0:
+                    continue
+                    
+                head_box = get_head_bbox(kpts)
+                
+                x1, y1, x2, y2 = map(int, human_box[:4])
+                x_h_anch = int((x1 + x2)/2)
+                y_h_anch = int(y2)
+                
+                x1_s = int(x1 * scale_x)
+                y1_s = int(y1 * scale_y)
+                x2_s = int(x2 * scale_x)
+                y2_s = int(y2 * scale_y)
+                
+                HT = str(track_id)
+                hcolor = get_color_from_id(human_idx)
+                
+                # Check zone
+                circle_point = (x_h_anch, y_h_anch)
+                areas_found = []
+                for i, polygon in enumerate(polygons):
+                    if is_point_in_polygon(circle_point, polygon):
+                        areas_found.append(i + 1)
+                
+                if areas_found:
+                    area_names = [f"Area {a}" for a in areas_found]
+                    pos_area = f"{', '.join(area_names)}"
+                else:
+                    pos_area = "OUT"
+                
+                if x_h_anch > 0 and y2 > 0:
+                    cv2.circle(output_frame, (int(x_h_anch * scale_x), int(y_h_anch * scale_y)), 3, hcolor, -1)
+                
+                # Find best face match
+                best_face = None
+                best_iou = 0
+                for face_id, data in face_results.items():
+                    fx1, fy1, fx2, fy2 = data["box"]
+                    face_box_coords = [fx1, fy1, fx2, fy2]
+                    overlap = iou(head_box, face_box_coords)
+                    if overlap > best_iou:
+                        best_iou = overlap
+                        best_face = data
+                
+                final_bbox_face = None
+                history = track_history[HT]
+                
+                if best_face is not None and best_iou > 0.2:
+                    if best_face["person"] not in ['NoFace', 'Unknown']:
+                        history["name"].append(best_face["person"])
+                        history["score"].append(best_face["score"])
+                        history["ref_img_id"].append(best_face["ref_img_id"])
+                        history["box"].append(best_face["box"])
+                    
+                    hscore = best_face["score"]
+                    hscore = f'{hscore:.2f}'
+                    FT = str(best_face["track_id"])
+                    face_name = f' - HT:{HT} - FT:{FT} - RS:{hscore}'
+                else:
+                    face_name = f' - HT:{HT}'
+                    continue_flag = True
+                
+                # Determine final name from history
+                name_counts = Counter(history["name"])
+                known_counts = {name: c for name, c in name_counts.items() if name != "Unknown"}
+                
+                if known_counts:
+                    best_name = max(known_counts, key=known_counts.get)
+                    indices = [i for i, n in enumerate(history["name"]) if n == best_name]
+                    score_mean = mean([history["score"][i] for i in indices])
+                    if score_mean < 0.40:
+                        final_name = 'Unknown'
+                        final_score = 0
+                        final_ref_img_id = -1
+                        final_bbox_face = best_face["box"] if best_face is not None else None
+                    else:
+                        final_name = best_name
+                        best_idx = max(indices, key=lambda i: history["score"][i])
+                        final_score = history["score"][best_idx]
+                        final_ref_img_id = history['ref_img_id'][best_idx]
+                        final_bbox_face = history['box'][best_idx]
+                else:
+                    final_name = "Unknown"
+                    final_score = 0
+                    final_ref_img_id = -1
+                    if best_face is not None:
+                        final_bbox_face = best_face.get("box")
+                
+                label = f'{pos_area} --- {final_name}{face_name}'
+                cv2.rectangle(output_frame, (x1_s, y1_s), (x2_s, y2_s), hcolor, 2)
+                
+                label_y = y1_s - 5 if y1_s > 30 else y2_s + 20
+                cv2.putText(output_frame, label, (x1_s + 5, label_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, hcolor, 1)
+                
+                # Draw skeleton
+                for start_idx, end_idx in skeleton_edges:
+                    if start_idx < len(kpts) and end_idx < len(kpts):
+                        x1_k, y1_k = kpts[start_idx]
+                        x2_k, y2_k = kpts[end_idx]
+                        if x1_k > 0 and y1_k > 0 and x2_k > 0 and y2_k > 0:
+                            cv2.line(output_frame, 
+                                    (int(x1_k * scale_x), int(y1_k * scale_y)),
+                                    (int(x2_k * scale_x), int(y2_k * scale_y)),
+                                    (255, 0, 0), 2)
+                
+                objs.append(track_id)
+                human_area.append(pos_area)
+                persons.append(final_name)
+                scores.append(final_score)
+                ref_img_ids.append(final_ref_img_id)
+                
+                # Save face
+                if final_bbox_face:
+                    if final_name != 'Unknown':
+                        margin_x = 20
+                        margin_y = 20
+                    else:
+                        margin_x = 0
+                        margin_y = 0
+                    x1_face, y1_face, x2_face, y2_face = final_bbox_face
+                    y1_m = max(y1_face - margin_y, 0)
+                    y2_m = min(y2_face + margin_y, frame.shape[0])
+                    x1_m = max(x1_face - margin_x, 0)
+                    x2_m = min(x2_face + margin_x, frame.shape[1])
+                    face_save = frame[y1_m:y2_m, x1_m:x2_m]
+                    if face_save.size > 0:
+                        final_face = cv2.resize(face_save, (112, 112))
+                        faces.append(final_face)
+            
+            # Draw faces
+            for face_id, data in face_results.items():
+                x1, y1, x2, y2 = data["box"]
+                x1 = int(x1 * scale_x)
+                y1 = int(y1 * scale_y)
+                x2 = int(x2 * scale_x)
+                y2 = int(y2 * scale_y)
+                person = data["person"]
+                score = data["score"]
+                color = get_color_from_id(face_id)
+                
+                cv2.rectangle(output_frame, (x1, y1), (x2, y2), color, 2)
+                if person == 'Unknown':
+                    id_track = str(data['track_id'])
+                    person = 'Unknown - ' + id_track
+                
+                if y1 > 20:
+                    cv2.putText(output_frame, f"{person} ({score:.2f})",
+                            (x1 + 5, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5, color, 1)
+            
+            output_frames.append(output_frame)
+            all_persons.append(persons)
+            all_scores.append(scores)
+            all_faces.append(faces)
+            all_objs.append(objs)
+            all_ref_img_ids.append(ref_img_ids)
+            all_human_areas.append(human_area)
+            out_scales.append([scale_x, scale_y])
+        
+        return output_frames, all_persons, all_scores, all_faces, all_objs, all_ref_img_ids, all_human_areas, out_scales
 
 
 
-    def FrameProcessing(self,frame, loaded_polygon_points):
-        bbox_face, landmarks = faceDetection(frame,  self.trt_manager)
-        human_bbox, human_key= tracking_human_detected(frame_id, frame)
-        frame , persons, scores, faces, objs, ref_img_ids, human_areas , out_scale= self.draw(frame, bbox_face , landmarks, human_bbox, human_key, self.COLLECTION, loaded_polygon_points)
-        frame = draw_polygons(frame, loaded_polygon_points, out_scale)
 
+
+    def FrameProcessing(self, frames, loaded_polygon_points):
+        """
+        Process frames one by one in a loop
+        """
+        
+        face_detection_results =[]
+        # human_detection_results = tracking_human_detected(frames[0])
+        human_detection_results = tracking_human_detected_batch(frames)
+        for frame in frames:
+            bbox_face, landmarks = faceDetection(frame, self.trt_manager)  # Single frame detection
+            face_detection_results.append({
+                                        'bbox_face': bbox_face,
+                                        'landmarks': landmarks
+                                    })
+        # frame_out, persons, scores, faces, objs, ref_img_ids, human_areas, out_scale = self.draw(
+        #     frames, face_detection_results,human_deteciton_results , 
+        #     self.COLLECTION, loaded_polygon_points
+        # )
+        # frame_out = draw_polygons(frame_out, loaded_polygon_points, out_scale)
+        frames_out, persons, scores, faces, objs, ref_img_ids, human_areas, out_scale = self.draw_batch(
+        frames, face_detection_results, human_detection_results,
+        self.COLLECTION, loaded_polygon_points
+    )
         return {
-        "frames": frame,
-        "persons": persons,
-        "scores":scores,
-        "faces": faces,
-        "objs": objs,
-        "ref_img_ids": ref_img_ids,
-        "area": human_areas,
-    }
+            "frames": frames_out,
+            "persons": persons,
+            "scores": scores,
+            "faces": faces,
+            "objs": objs,
+            "ref_img_ids": ref_img_ids,
+            "area": human_areas,
+        }
+        
+    
