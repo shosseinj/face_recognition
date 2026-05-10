@@ -1,5 +1,19 @@
 import urllib
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Index, Boolean, ForeignKey, NVARCHAR, Unicode, Table
+from sqlalchemy import (
+    create_engine, 
+    Column, 
+    Integer, 
+    String, 
+    DateTime, 
+    Float, 
+    Index, 
+    Boolean, 
+    ForeignKey, 
+    NVARCHAR, 
+    Unicode, 
+    Table,
+    JSON
+)
 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
@@ -136,12 +150,13 @@ class Room(Base):
     room_number = Column(String(50), nullable=False, unique=True, index=True)  # e.g., "101", "A-202"
     room_name = Column(NVARCHAR(200), nullable=True)  # e.g., "Conference Room", "Office A"
     room_type = Column(NVARCHAR(100), nullable=True)  # e.g., "office", "conference", "lab"
-    capacity = Column(Integer, nullable=True)
+    # capacity = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=True)
     description = Column(NVARCHAR(500), nullable=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    
+    polygon = Column(JSON, nullable=True)
+    camera_id = Column(Integer, nullable=True)
     # Relationships
     personnel = relationship("Personnel", secondary=personnel_room_association, back_populates="rooms")
     # access_logs = relationship("RoomAccessLog", back_populates="room", cascade="all, delete-orphan")

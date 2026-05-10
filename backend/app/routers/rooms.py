@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime, timedelta
-
+from ..models.schemas import RoomCreate, RoomResponse, RoomUpdate
 from ..models.db_functions import (
     get_db,
     create_room,
@@ -20,33 +20,32 @@ from ..models.db_functions import (
     # get_access_statistics
 )
 from ..models.database import Room, Personnel
+from enum import Enum
 
 
 router = APIRouter(prefix="/rooms", tags=["Rooms"])
 
 # ==================== ROOM MANAGEMENT ====================
-@router.post("/")
+
+
+@router.post("/", response_model=RoomResponse)
 def create_new_room(
-    room_number: str,
-    room_name: Optional[str] = None,
-    room_type: Optional[str] = None,
-    capacity: Optional[int] = None,
-    description: Optional[str] = None,
+    room_data: RoomCreate,  # ← Use the schema here
     db: Session = Depends(get_db)
 ):
     """Create a new room"""
     room = create_room(
-        room_number=room_number,
-        room_name=room_name,
-        room_type=room_type,
-        capacity=capacity,
-        description=description,
+        room_number=room_data.room_number,
+        room_name=room_data.room_name,
+        room_type=room_data.room_type,
+        description=room_data.description,
+        polygon=room_data.polygon,
+        camera_id=room_data.camera_id,
         db=db
     )
     if not room:
-        raise HTTPException(status_code=400, detail="Room already exists or invalid data")
+        raise HTTPException(status_code=400, detail="ناحیه با این کد موجود است!")
     return room
-
 
 @router.get("/")
 def list_rooms(
@@ -57,8 +56,7 @@ def list_rooms(
     rooms = get_all_rooms(active_only=active_only, db=db)
     return rooms
 
-
-@router.get("/{room_id}")
+@router.get("/{room_id}", response_model=RoomResponse)
 def get_room_by_id(
     room_id: int,
     db: Session = Depends(get_db)
@@ -69,38 +67,23 @@ def get_room_by_id(
         raise HTTPException(status_code=404, detail="Room not found")
     return room
 
-
-@router.put("/{room_id}")
+@router.put("/{room_id}", response_model=RoomResponse)
 def update_room_info(
     room_id: int,
-    room_number: Optional[str] = None,
-    room_name: Optional[str] = None,
-    room_type: Optional[str] = None,
-    capacity: Optional[int] = None,
-    is_active: Optional[bool] = None,
-    description: Optional[str] = None,
+    room_data: RoomUpdate,  # ← Use the schema here
     db: Session = Depends(get_db)
 ):
     """Update room information"""
-    update_data = {}
-    if room_number is not None:
-        update_data['room_number'] = room_number
-    if room_name is not None:
-        update_data['room_name'] = room_name
-    if room_type is not None:
-        update_data['room_type'] = room_type
-    if capacity is not None:
-        update_data['capacity'] = capacity
-    if is_active is not None:
-        update_data['is_active'] = is_active
-    if description is not None:
-        update_data['description'] = description
+    # Filter out None values (only update provided fields)
+    update_data = {k: v for k, v in room_data.dict().items() if v is not None}
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
     
     room = update_room(room_id=room_id, db=db, **update_data)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     return room
-
 
 @router.delete("/{room_id}")
 def remove_room(
@@ -113,6 +96,8 @@ def remove_room(
     if not success:
         raise HTTPException(status_code=404, detail="Room not found")
     return {"message": "Room deleted successfully" if hard_delete else "Room deactivated successfully"}
+
+
 
 
 # ==================== ACCESS MANAGEMENT ====================
@@ -134,7 +119,6 @@ def grant_access(
         raise HTTPException(status_code=400, detail="Failed to grant access. Check if personnel/room exists or access already granted")
     return {"message": "Access granted successfully"}
 
-
 @router.delete("/{room_id}/revoke/{personnel_id}")
 def revoke_access(
     room_id: int,
@@ -151,7 +135,6 @@ def revoke_access(
         raise HTTPException(status_code=404, detail="Access not found")
     return {"message": "Access revoked successfully"}
 
-
 @router.get("/{room_id}/personnel")
 def get_room_access_list(
     room_id: int,
@@ -161,7 +144,6 @@ def get_room_access_list(
     personnel_list = get_room_personnel(room_id=room_id, db=db)
     return personnel_list
 
-
 @router.get("/personnel/{personnel_id}/rooms")
 def get_personnel_rooms_list(
     personnel_id: int,
@@ -170,7 +152,6 @@ def get_personnel_rooms_list(
     """Get all rooms a personnel has access to"""
     rooms = get_personnel_rooms(personnel_id=personnel_id, db=db)
     return rooms
-
 
 @router.get("/check-access/{personnel_id}/{room_id}")
 def check_access(

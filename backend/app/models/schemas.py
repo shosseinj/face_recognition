@@ -4,15 +4,44 @@ from typing import Optional, List
 from pydantic import Field
 from ..validators import validate_iran_national_code, normalize_national_code
 import re
-
+from enum import Enum
+from pydantic import BaseModel, Field, validator
 
 # ==================== ROOM SCHEMAS ====================
+
+class RoomTypeEnum(str, Enum):
+    """Room type options"""
+    ILLEGAL = "illegal"
+    PUBLIC = "public"
+    CUSTOM = "custom"
+    
+    @classmethod
+    def get_values(cls):
+        return [item.value for item in cls]
+    
+
+
+
 class RoomBase(BaseModel):
     room_number: str
     room_name: Optional[str] = None
-    room_type: Optional[str] = None
-    capacity: Optional[int] = None
+    room_type: Optional[RoomTypeEnum] = None 
     description: Optional[str] = None
+    polygon: Optional[list] = None  # ✅ Add this - will store [[x1,y1], [x2,y2], ...]
+    camera_id: Optional[int] = None  # ✅ Add this
+
+    @validator('room_type', pre=True)
+    def validate_room_type(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, str):
+            # Case-insensitive validation with Persian error message
+            v_lower = v.lower()
+            if v_lower not in [e.value for e in RoomTypeEnum]:
+                raise ValueError(f'نوع ناحیه باید یکی از موارد زیر باشد: illegal, public, custom')
+            return RoomTypeEnum(v_lower)
+        return v
+    
 
 class RoomCreate(RoomBase):
     pass
@@ -20,10 +49,12 @@ class RoomCreate(RoomBase):
 class RoomUpdate(BaseModel):
     room_number: Optional[str] = None
     room_name: Optional[str] = None
-    room_type: Optional[str] = None
-    capacity: Optional[int] = None
+    room_type: Optional[RoomTypeEnum] = None 
     is_active: Optional[bool] = None
     description: Optional[str] = None
+    polygon: Optional[list] = None  # ✅ Add this
+    camera_id: Optional[int] = None  # ✅ Add this
+
 
 class RoomResponse(RoomBase):
     id: int

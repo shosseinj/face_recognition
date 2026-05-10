@@ -22,6 +22,48 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 import base64
 
 import asyncio
+import json
+# from .db_functions import sync_polygons_to_json
+
+
+
+def sync_polygons_to_json(db: Session, json_path: str = "polygon_points.json") -> bool:
+    """
+    Gather all room polygons from database and save to JSON file.
+    Replaces the existing file with current database data.
+    
+    Args:
+        db: Database session
+        json_path: Path to the JSON file (default: polygon_points.json)
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Query all active rooms that have polygons
+        rooms = db.query(Room).filter(
+            Room.is_active == True,
+            Room.polygon.isnot(None)
+        ).all()
+        
+        # Extract polygons
+        polygons = []
+        for room in rooms:
+            if room.polygon and len(room.polygon) >= 3:
+                polygons.append(room.polygon)
+        
+        # Write to JSON file (overwrite)
+        with open(json_path, 'w') as f:
+            json.dump(polygons, f, indent=2)
+        
+        print(f"✅ Synced {len(polygons)} polygons to {json_path}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error syncing polygons to JSON: {e}")
+        return False
+    
+    
 
 
 
@@ -457,10 +499,13 @@ def create_room(
     room_number: str,
     room_name: str = None,
     room_type: str = None,
-    capacity: int = None,
+    # capacity: int = None,
     description: str = None,
+    polygon: Optional[list] = None,  # ✅ Add this
+    camera_id: Optional[int] = None,  # ✅ Add this
     db: Session = None
 ):
+    
     """Create a new room"""
     close_db = False
     if db is None:
@@ -478,15 +523,20 @@ def create_room(
             room_number=room_number,
             room_name=room_name,
             room_type=room_type,
-            capacity=capacity,
+            # capacity=capacity,
             is_active=True,
-            description=description
+            description=description,
+            polygon=polygon,  # ✅ Add this line
+            camera_id=camera_id  # ✅ Add this line
         )
         
         db.add(room)
         db.commit()
         db.refresh(room)
         print(f"✅ Created room: {room_number} (ID: {room.id})")
+
+        sync_polygons_to_json(db)
+
         return room
         
     except Exception as e:
@@ -496,6 +546,8 @@ def create_room(
     finally:
         if close_db:
             db.close()
+
+
 
 
 def get_room(room_id: int = None, room_number: str = None, db: Session = None):
@@ -538,7 +590,19 @@ def get_all_rooms(active_only: bool = True, db: Session = None):
             db.close()
 
 
-def update_room(room_id: int, db: Session = None, **kwargs):
+
+def update_room(
+    room_id: int,
+    db: Session = None,
+    room_number: str = None,
+    room_name: str = None,
+    room_type: str = None,
+    is_active: bool = None,
+    description: str = None,
+    polygon: Optional[list] = None,  # ✅ Add this
+    camera_id: Optional[int] = None,  # ✅ Add this
+    **kwargs
+):
     """Update room information"""
     close_db = False
     if db is None:
@@ -551,13 +615,26 @@ def update_room(room_id: int, db: Session = None, **kwargs):
             print(f"❌ Room with ID {room_id} not found")
             return None
         
-        for key, value in kwargs.items():
-            if hasattr(room, key) and key not in ['id', 'created_at']:
-                setattr(room, key, value)
+        # Update fields if provided
+        if room_number is not None:
+            room.room_number = room_number
+        if room_name is not None:
+            room.room_name = room_name
+        if room_type is not None:
+            room.room_type = room_type
+        if is_active is not None:
+            room.is_active = is_active
+        if description is not None:
+            room.description = description
+        if polygon is not None:  # ✅ Add this
+            room.polygon = polygon
+        if camera_id is not None:  # ✅ Add this
+            room.camera_id = camera_id
         
         db.commit()
         db.refresh(room)
-        print(f"✅ Updated room: {room.room_number}")
+        print(f"✅ Updated room ID: {room_id}")
+        sync_polygons_to_json(db)
         return room
         
     except Exception as e:
@@ -590,6 +667,7 @@ def delete_room(room_id: int, hard_delete: bool = False, db: Session = None):
             print(f"✅ Deactivated room: {room.room_number}")
         
         db.commit()
+        sync_polygons_to_json(db)
         return True
         
     except Exception as e:
@@ -805,3 +883,9 @@ def image_to_base64(image_path: str) -> Optional[str]:
     except Exception as e:
         print(f"Error converting image to base64: {e}")
         return None
+    
+
+
+
+# app/utils/polygon_sync.py
+
