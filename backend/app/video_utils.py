@@ -4,7 +4,7 @@ import tempfile
 import cv2
 import numpy as np
 from pathlib import Path
-
+import asyncio
 # Try to get FFmpeg path from portable-ffmpeg
 try:
     from portable_ffmpeg import get_ffmpeg
@@ -24,16 +24,31 @@ except ImportError:
         HAS_FFMPEG = False
         FFMPEG_PATH = 'ffmpeg'  # Will fail, but we'll catch it
 
-def save_video_with_ffmpeg(
+
+async def save_video_with_ffmpeg(
     frames: list,
     output_path: str,
     fps: int = 20,
-    quality: str = "slow",#medium
+    quality: str = "slow",  # medium
     for_web: bool = True
 ) -> bool:
     """
-    Save video using FFmpeg for optimal web playback
+    Save video using FFmpeg for optimal web playback (async version)
     """
+    # Move the synchronous work to a thread pool
+    return await asyncio.to_thread(
+        _save_video_sync,
+        frames, output_path, fps, quality, for_web
+    )
+
+def _save_video_sync(
+    frames: list,
+    output_path: str,
+    fps: int = 20,
+    quality: str = "slow",
+    for_web: bool = True
+) -> bool:
+    """Synchronous version of the video saving logic"""
     if not HAS_FFMPEG:
         print("⚠️ FFmpeg not available, use fallback instead")
         return False
@@ -53,7 +68,7 @@ def save_video_with_ffmpeg(
                 if isinstance(frame, np.ndarray):
                     # Ensure correct color format
                     if len(frame.shape) == 3 and frame.shape[2] == 3:
-                        frame_rgb = frame #cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        frame_rgb = frame
                     else:
                         frame_rgb = frame
                     
@@ -109,6 +124,7 @@ def save_video_with_ffmpeg(
         import traceback
         traceback.print_exc()
         return False
+    
 
 def save_fallback_opencv(frames: list, output_path: str, fps: int = 20) -> bool:
     """Fallback method using OpenCV if FFmpeg fails"""

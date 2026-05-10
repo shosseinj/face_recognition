@@ -210,7 +210,7 @@ def generate_fake_detections(num_detections=100):
                 #     for_web=True
                 # )
                 
-                success = await asyncio.to_thread(
+                success = asyncio.to_thread(
                     save_video_with_ffmpeg,  # Original sync function
                     frames, str(video_path), 20, "medium", True
                 )

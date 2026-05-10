@@ -1317,45 +1317,45 @@ async def get_personnel_images(
 
 
 
-@router.get("/{personnel_id}/with-images", response_model=PersonnelWithImages)
-async def get_personnel_with_images(
-    request: Request,
-    personnel_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    Get personnel details along with all their images
-    """
-    # Get personnel with images
-    personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
+# @router.get("/{personnel_id}/with-images", response_model=PersonnelWithImages)
+# async def get_personnel_with_images(
+#     request: Request,
+#     personnel_id: int,
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     Get personnel details along with all their images
+#     """
+#     # Get personnel with images
+#     personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
     
-    if not personnel:
-        raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
+#     if not personnel:
+#         raise HTTPException(status_code=404, detail=f"Personnel with ID {personnel_id} not found")
     
-    # Convert image paths to URLs
-    base_url = str(request.base_url).rstrip('/')
-    images_response = []
+#     # Convert image paths to URLs
+#     base_url = str(request.base_url).rstrip('/')
+#     images_response = []
     
-    for img in personnel.images:
-        images_response.append(
-            PersonnelImageResponse(
-                id=img.id,
-                image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
-                personnel_id=img.personnel_id,
-                uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
-            )
-        )
+#     for img in personnel.images:
+#         images_response.append(
+#             PersonnelImageResponse(
+#                 id=img.id,
+#                 image_url=f"{base_url}/api/v1/personnel/{personnel_id}/images/{img.id}/file",
+#                 personnel_id=img.personnel_id,
+#                 uploaded_at=img.uploaded_at if hasattr(img, 'uploaded_at') else None
+#             )
+#         )
     
-    return PersonnelWithImages(
-        id=personnel.id,
-        fname=personnel.fname,
-        lname=personnel.lname,
-        national_code=personnel.national_code,
-        staff=personnel.staff,
-        department=personnel.department,
-        created_at=personnel.created_at,
-        images=images_response
-    )
+#     return PersonnelWithImages(
+#         id=personnel.id,
+#         fname=personnel.fname,
+#         lname=personnel.lname,
+#         national_code=personnel.national_code,
+#         staff=personnel.staff,
+#         department=personnel.department,
+#         created_at=personnel.created_at,
+#         images=images_response
+#     )
 
 
 
