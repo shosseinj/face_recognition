@@ -16,6 +16,10 @@ def convert_image_to_base64(image_source: Union[str, Path]) -> str:
     Returns:
         Base64 encoded string of the image
     """
+    # ✅ Add None check
+    if image_source is None:
+        return None
+    
     # Check if it's a URL
     if str(image_source).startswith(('http://', 'https://')):
         # Handle remote URL

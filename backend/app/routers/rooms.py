@@ -101,23 +101,46 @@ def remove_room(
 
 
 # ==================== ACCESS MANAGEMENT ====================
-@router.post("/{room_id}/grant/{personnel_id}")
+@router.post("/grant-access")
 def grant_access(
-    room_id: int,
-    personnel_id: int,
+    room_ids: List[int],  # Changed to list
+    personnel_ids: List[int],  # Changed to list
     assigned_by: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """Grant a personnel access to a room"""
-    success = grant_room_access(
-        personnel_id=personnel_id,
-        room_id=room_id,
-        assigned_by=assigned_by,
-        db=db
-    )
-    if not success:
-        raise HTTPException(status_code=400, detail="Failed to grant access. Check if personnel/room exists or access already granted")
-    return {"message": "Access granted successfully"}
+    """Grant multiple personnel access to multiple rooms"""
+    
+    success_count = 0
+    failed_grants = []
+    
+    # Grant access for each combination
+    for personnel_id in personnel_ids:
+        for room_id in room_ids:
+            success = grant_room_access(
+                personnel_id=personnel_id,
+                room_id=room_id,
+                assigned_by=assigned_by,
+                db=db
+            )
+            
+            if success:
+                success_count += 1
+            else:
+                failed_grants.append({
+                    "personnel_id": personnel_id,
+                    "room_id": room_id
+                })
+    
+    return {
+        "message": f"Access granted for {success_count} out of {len(personnel_ids) * len(room_ids)} combinations",
+        "success_count": success_count,
+        "failed_count": len(failed_grants),
+        "failed_grants": failed_grants if failed_grants else None
+    }
+
+
+
+
 
 @router.delete("/{room_id}/revoke/{personnel_id}")
 def revoke_access(
