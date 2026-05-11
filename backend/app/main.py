@@ -174,8 +174,10 @@ class WebSocketManager:
         batch_frame = datas['frames']
         batch_persons = datas['persons']
         batch_scores = datas['scores']
-        for n, (frame, persons, scores, camera_id) in enumerate(zip(batch_frame, batch_persons, batch_scores, batch_camera_id)):
-            camera_id = str(camera_id)
+        for n, (frame) in enumerate(batch_frame):
+            camera_id = str(batch_camera_id[n]) if n < len(batch_camera_id) else []
+            persons =batch_persons[n] if n < len(batch_persons) else []
+            scores=batch_scores[n] if n < len(batch_scores) else []
             success, encoded_frame = cv2.imencode('.jpg', frame, 
                                                 [cv2.IMWRITE_JPEG_QUALITY, 85])
             
@@ -518,7 +520,7 @@ def frame_generator_batch(sources, batch_size=None):
         - batch_indices: list of indices [0, 1, 2, ...]
     """
     cameras = []
-    
+    INPUT_SIZE = 640
     # Open all cameras
     for i, cam in enumerate(sources):
         if cam["type"] == "cv2":
@@ -550,6 +552,7 @@ def frame_generator_batch(sources, batch_size=None):
     
     while True:
         batch_frames = []
+        batch_org_frames = []
         batch_camera_ids = []
         
         # Collect exactly ONE frame from each camera
@@ -576,113 +579,42 @@ def frame_generator_batch(sources, batch_size=None):
                     break
             
             if frame is not None:
-                batch_frames.append(frame)
+                fr = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))
+                batch_frames.append(fr)
+
+                h, w = frame.shape[:2]
+
+                scale_x = INPUT_SIZE / w
+                scale_y = INPUT_SIZE / h
+
+                batch_org_frames.append({'frame': frame, 'shape':(scale_x, scale_y)})
                 batch_camera_ids.append(cam["cam_id"])
             else:
                 # If camera fails, use a blank frame or skip?
                 print(f"⚠️ Warning: Could not read from camera {cam['cam_id']}")
                 # Option 1: Use blank frame
-                blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                blank_frame = np.zeros((640, 640, 3), dtype=np.uint8)
                 batch_frames.append(blank_frame)
+                batch_org_frames.append(blank_frame)
                 batch_camera_ids.append(cam["cam_id"])
         
         # Yield batch (size = number of cameras)
         batch_indices = list(range(len(batch_frames)))
-        yield batch_frames, batch_camera_ids, batch_indices
+        yield batch_frames, batch_org_frames, batch_camera_ids, batch_indices
 import json
-def frame_generator_batch1(sources):
-    """
-    Use OpenCV for RTSP streams (more stable than PyAV)
-    """
-    cameras = []
-    
-    for i, cam in enumerate(sources):
-        if cam["type"] == "cv2":
-            cap = cv2.VideoCapture(cam["src"])
-            if not cap.isOpened():
-                print(f"⚠️ Cannot open camera {cam['src']}")
-                continue
-            cameras.append({
-                "type": "cv2",
-                "reader": cap,
-                "cam_id": i
-            })
-        elif cam["type"] == "rtsp":
-            try:
-                # Use OpenCV for RTSP with optimization flags
-                cap = cv2.VideoCapture(cam["src"], cv2.CAP_FFMPEG)
-                
-                # Set RTSP options
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                cap.set(cv2.CAP_PROP_FPS, 30)
-                cap.set(cv2.CAP_PROP_POS_MSEC, 0)
-                
-                if not cap.isOpened():
-                    print(f"⚠️ Cannot open RTSP {cam['src']}")
-                    continue
-                    
-                cameras.append({
-                    "type": "rtsp",
-                    "reader": cap,
-                    "cam_id": i
-                })
-                print(f"✅ Connected to RTSP {cam['src']} using OpenCV")
-            except Exception as e:
-                print(f"❌ Failed to connect to RTSP {cam['src']}: {e}")
-                continue
-    
-    while True:
-        batch_frames = []
-        batch_camera_ids = []
-        
-        for cam in cameras:
-            frame = None
-            max_retries = 3
-            
-            for attempt in range(max_retries):
-                try:
-                    cap = cam["reader"]
-                    ret, frame = cap.read()
-                    
-                    if not ret or frame is None:
-                        # Try to reconnect on failure
-                        if attempt == max_retries - 1:
-                            print(f"⚠️ Reconnecting camera {cam['cam_id']}...")
-                            cap.release()
-                            cap = cv2.VideoCapture(cam["src"], cv2.CAP_FFMPEG)
-                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                            cam["reader"] = cap
-                        continue
-                    
-                    break
-                except Exception as e:
-                    print(f"Error reading frame from camera {cam['cam_id']}: {e}")
-                    continue
-            
-            if frame is not None:
-                batch_frames.append(frame)
-                batch_camera_ids.append(cam["cam_id"])
-            else:
-                blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                batch_frames.append(blank_frame)
-                batch_camera_ids.append(cam["cam_id"])
-        
-        yield batch_frames, batch_camera_ids, list(range(len(batch_frames)))
-async def process_frame(model,loaded_polygon_points, frame, cam_id, polygon_points, try_objs, track_history):
+
+
+
+
+
+
+
+async def process_frame(model,loaded_polygon_points, frame, org_frames, cam_id, polygon_points, try_objs, track_history):
     try:
             clip_length = 100
             half_clip = clip_length // 2
-            # data = {
-            #                         "frames": frame,
-            #                         "persons": [],
-            #                         "scores":[],
-            #                         "faces": [],
-            #                         "objs": [],
-            #                         "ref_img_ids": [],
-            #                         "area": [],
-            #                     }
-            # data['cam_id'] = cam_id
-            datas = model.FrameProcessing(frame, loaded_polygon_points)
+
+            datas = model.FrameProcessing(frame, org_frames, loaded_polygon_points)
         
 
             persons_batch = datas['persons'] 
@@ -787,10 +719,10 @@ async def video_broadcaster():
     try_objs = {}
     sources = [
     # {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
-    # {"type": "cv2", "src": './video8.mp4'},
+    {"type": "cv2", "src": './video8.mp4'},
     {"type": "cv2", "src": 0},
     {"type": "cv2", "src": './video7.mp4'},
-    {"type": "cv2", "src": './video7.mp4'},
+    # {"type": "cv2", "src": './video7.mp4'},
     {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": 0},
@@ -799,7 +731,7 @@ async def video_broadcaster():
     # {"type": "rtsp", "src": "rtsp://admin:pMc_897OmId@192.168.110.29:554/Streaming/Channels/101"},
     # {"type": "rtsp", "src": "rtsp://admin:pMc_897OmId@192.168.110.28:554/Streaming/Channels/101"},
     # {"type": "cv2", "src": 0},
-    {"type": "rtsp", "src": config.RTSP_URL}
+    # {"type": "rtsp", "src": config.RTSP_URL}
 ]
     gen = frame_generator_batch(sources)
     model = ModelManager()
@@ -809,9 +741,9 @@ async def video_broadcaster():
     while True:
         # Yield control to event loop
             await asyncio.sleep(0.001) 
-            batch_frames, batch_camera_ids, batch_indices = next(gen) 
+            batch_frames, batch_org_frames, batch_camera_ids, batch_indices = next(gen) 
           
-            data_list = await process_frame(model, loaded_polygon_points, batch_frames, batch_camera_ids, loaded_polygon_points, try_objs, track_history)
+            data_list = await process_frame(model, loaded_polygon_points, batch_frames, batch_org_frames, batch_camera_ids, loaded_polygon_points, try_objs, track_history)
             
             if manager.count > 0:
                 # asyncio.create_task(broadcast_frame_to_camera(data, '0'))

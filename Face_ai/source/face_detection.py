@@ -85,13 +85,242 @@ def faceDetection(frame, trt_manager):
     # return  bboxes , landmarks
 
 
-def faceDetectionBatch(frames, trt_manager):
-    results=[]
-    for frame in frames:
-        bbox_face, landmarks = faceDetection(frame, trt_manager)
-        results.append( [bbox_face, landmarks])
-    return results
+def estimate_face_landmarks(bbox, frame_shape=None):
+    """
+    Estimate facial landmarks based on bounding box proportions.
+    Returns 5 key points: [left_eye, right_eye, nose, left_mouth, right_mouth]
+    
+    Args:
+        bbox: [x1, y1, x2, y2] face bounding box
+        frame_shape: (h, w) optional for bounds checking
+    
+    Returns:
+        list of 5 landmarks, each as [x, y]
+    """
+    x1, y1, x2, y2 = bbox
+    width = x2 - x1
+    height = y2 - y1
+    
+    # Face ratios based on anthropological measurements
+    # Eyes are typically at 1/3 of face height from top
+    eye_y = y1 + height * 0.35
+    
+    # Eye positions (left and right eyes)
+    left_eye_x = x1 + width * 0.35
+    right_eye_x = x1 + width * 0.65
+    
+    # Nose is typically at 1/2 of face height
+    nose_x = x1 + width * 0.5
+    nose_y = y1 + height * 0.55
+    
+    # Mouth corners are typically at 2/3 of face height
+    mouth_y = y1 + height * 0.75
+    left_mouth_x = x1 + width * 0.35
+    right_mouth_x = x1 + width * 0.65
+    
+    landmarks = [
+        [int(left_eye_x), int(eye_y)],      # Left eye
+        [int(right_eye_x), int(eye_y)],     # Right eye
+        [int(nose_x), int(nose_y)],         # Nose
+        [int(left_mouth_x), int(mouth_y)],  # Left mouth corner
+        [int(right_mouth_x), int(mouth_y)]  # Right mouth corner
+    ]
+    
 
+    
+    return landmarks
+
+
+import numpy as np
+
+def assess_face_quality(face_image):
+    """
+    Assess if face is frontal and good quality
+    Returns: quality_score, is_valid
+    """
+    if face_image is None or face_image.size == 0:
+        return 0.0, False
+    
+    try:
+        h, w = face_image.shape[:2]
+        
+        # Check minimum size
+        if h < 30 or w < 30:
+            return 0.0, False
+        
+        # Convert to grayscale for analysis
+        if len(face_image.shape) == 3:
+            if face_image.shape[2] == 3:
+                gray = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = face_image[:,:,0]  # Already single channel
+        else:
+            gray = face_image
+        
+        # Ensure we have valid image data
+        if gray is None or gray.size == 0:
+            return 0.0, False
+        
+        # 1. Symmetry check (frontal faces are more symmetric)
+        try:
+            mid_point = w // 2
+            left_half = gray[:, :mid_point]
+            right_half = cv2.flip(gray[:, mid_point:], 1)
+            
+            # Handle width mismatch
+            min_width = min(left_half.shape[1], right_half.shape[1])
+            if min_width > 0:
+                left_half = left_half[:, :min_width]
+                right_half = right_half[:, :min_width]
+                symmetry_score = 1.0 - np.mean(np.abs(left_half.astype(float) - right_half.astype(float))) / 255.0
+            else:
+                symmetry_score = 0.0
+        except Exception:
+            symmetry_score = 0.0
+        
+        # 2. Contrast/sharpness check
+        try:
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            sharpness_score = min(laplacian_var / 100.0, 1.0)
+        except Exception:
+            sharpness_score = 0.0
+        
+        # 3. Image variance check
+        try:
+            std_val = np.std(gray.astype(float))
+            variance_score = min(std_val / 50.0, 1.0)
+        except Exception:
+            variance_score = 0.0
+        
+        # 4. Brightness check (avoid too dark or too bright images)
+        try:
+            mean_brightness = np.mean(gray)
+            # Optimal brightness range: 60-200
+            if mean_brightness < 40 or mean_brightness > 230:
+                brightness_score = 0.3
+            elif mean_brightness < 60 or mean_brightness > 200:
+                brightness_score = 0.7
+            else:
+                brightness_score = 1.0
+        except Exception:
+            brightness_score = 0.5
+        
+        # 5. Histogram spread check (well-exposed images have better histogram spread)
+        try:
+            hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+            hist = hist.flatten() / hist.sum()
+            # Calculate entropy-like measure
+            non_zero_hist = hist[hist > 0]
+            if len(non_zero_hist) > 0:
+                hist_spread_score = min(len(non_zero_hist) / 100.0, 1.0)
+            else:
+                hist_spread_score = 0.0
+        except Exception:
+            hist_spread_score = 0.0
+        
+        # 6. Edge density check (too few edges might indicate blur/noise)
+        try:
+            edges = cv2.Canny(gray, 50, 150)
+            edge_density = np.sum(edges > 0) / (h * w)
+            edge_score = min(edge_density * 20, 1.0)  # Normalize
+        except Exception:
+            edge_score = 0.5
+        
+        # Combined quality score with updated weights
+        quality_score = (
+            symmetry_score * 0.25 +    # Symmetry is important for frontal faces
+            sharpness_score * 0.25 +   # Sharpness for clarity
+            variance_score * 0.15 +    # Overall image variance
+            brightness_score * 0.15 +  # Proper exposure
+            hist_spread_score * 0.1 +  # Histogram distribution
+            edge_score * 0.1           # Edge information
+        )
+        
+        # Updated thresholds with more nuanced validation
+        is_valid = (
+            quality_score > 0.35 and           # Overall quality threshold
+            symmetry_score > 0.2 and           # Minimum symmetry
+            sharpness_score > 0.15 and         # Minimum sharpness
+            variance_score > 0.1 and           # Minimum variance
+            brightness_score > 0.5 and         # Acceptable brightness
+            quality_score > 0.4                # Final quality check
+        )
+        
+        return quality_score, is_valid
+        
+    except Exception as e:
+        print(f"Error in assess_face_quality: {e}")
+        return 0.0, False
+
+
+def faceDetectionBatch(frames, org_frames, face_detector, face_embedding, face_recognition, collocation):
+    if not frames:
+        return []
+     
+    results = face_detector(frames, verbose=False, batch=4)
+    all_frame_results = []
+        
+    for idx, result in enumerate(results):
+        tracked_bbox = []
+        try:   
+  
+            xywh = result.boxes.xywh.cpu().numpy()
+            confs = result.boxes.conf.cpu().numpy()
+            cls_ids = result.boxes.cls.cpu().numpy()
+            # keypoints = result.keypoints.xy.cpu().numpy()
+     
+            for i in range(len(xywh)):
+                if int(cls_ids[i]) != 0:
+                    continue
+
+                x_center, y_center, width, height = xywh[i]
+                x1 = x_center - (width / 2)
+                y1 = y_center - (height / 2)
+                x2 = x_center + (width / 2)
+                y2 = y_center + (height / 2)
+        
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                score = float(confs[i])
+
+                # face_resized = face_align.norm_crop(frame, landmark.astype(int))
+                orig_h, orig_w = org_frames[idx]['frame'].shape[:2]
+                det_h, det_w = frames[idx].shape[:2]
+
+                scale_x = orig_w / det_w
+                scale_y = orig_h / det_h
+
+                face_resized = org_frames[idx]['frame'][int(y1*scale_y):int(y2*scale_y), int(x1*scale_x):int(x2*scale_x)]
+
+                # face_resized = frames[idx][y1:y2, x1:x2]
+                face_resized = cv2.resize(face_resized, (112,112))
+                if face_resized is None or face_resized.size == 0:
+                    return None, 0.0
+
+                h, w = face_resized.shape[:2] # Blur check
+                if (h < 30 or w < 30) or (np.std(face_resized) < 15):
+                    continue
+
+                quality_score, img_valid = assess_face_quality(face_resized)
+
+                if img_valid:
+                    embedding, rec_score = face_embedding(face_resized)
+                    if embedding is None:
+                        person = "Unknown"
+                        rec_score = 0.0
+                        ref_img_id = None
+                    else:
+                        person, rec_score, ref_img_id = face_recognition(embedding, collocation)
+                else:
+                    person = 'No quality ------------------------'
+                tracked_bbox.append([x1, y1, x2, y2, score, person, rec_score, ref_img_id])
+            frame_data = {
+                'cam_id': idx,
+                'detections': tracked_bbox
+            }
+            all_frame_results.append(frame_data)
+        except Exception as e:
+            print(e)
+    return all_frame_results
 
 
 
@@ -239,44 +468,4 @@ def faceDetectionBatch_old(frames, trt_manager):
     
     return results
 
-def postprocess_detections(loc, conf, landmarks, input_size, original_size, 
-                          confidence_threshold=0.5, nms_threshold=0.4):
-    """
-    Direct post-processing of model outputs
-    
-    Args:
-        loc: (N, 4) bounding box offsets
-        conf: (N, 2) confidence scores [background, face]
-        landmarks: (N, 10) landmark coordinates
-        input_size: (width, height) of model input
-        original_size: (height, width) of original frame
-    """
-    import numpy as np
-    
-    # Get face confidence scores
-    scores = conf[:, 1]
-    
-    # Filter by confidence threshold
-    mask = scores > confidence_threshold
-    if not np.any(mask):
-        return np.empty((0, 5), dtype=np.float32), np.empty((0, 5, 2), dtype=np.float32)
-    
-    loc = loc[mask]
-    scores = scores[mask]
-    landmarks = landmarks[mask]
-    
-    # Decode bounding boxes (this depends on your anchor configuration)
-    # You'll need to implement anchor generation and decoding here
-    
-    # Apply NMS
-    # keep = nms(bboxes, scores, nms_threshold)
-    
-    # Format bboxes as [x1, y1, x2, y2, confidence]
-    bboxes_result = np.zeros((len(scores), 5), dtype=np.float32)
-    # bboxes_result[:, :4] = decoded_bboxes
-    # bboxes_result[:, 4] = scores
-    
-    # Format landmarks as (N, 5, 2)
-    landmarks_result = landmarks.reshape(-1, 5, 2)
-    
-    return bboxes_result, landmarks_result
+

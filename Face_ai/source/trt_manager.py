@@ -38,7 +38,7 @@ class TensorRTManager:
             self.rec_output_name = None
             self.rec_input_shape = None
     
-    def initialize(self, det_engine_path, rec_engine_path=None, det_input_shape=(1,3,640,640), rec_input_shape=(1,3,112,112)):
+    def initialize(self, det_engine_path= None, rec_engine_path=None, det_input_shape=(1,3,640,640), rec_input_shape=(1,3,112,112)):
         """Initialize TensorRT engines with proper context"""
         try:
             print("Initializing TensorRT...")
