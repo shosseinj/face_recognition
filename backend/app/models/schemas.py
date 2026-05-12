@@ -6,8 +6,10 @@ from ..validators import validate_iran_national_code, normalize_national_code
 import re
 from enum import Enum
 from pydantic import BaseModel, Field, validator
-
+import pytz
 # ==================== ROOM SCHEMAS ====================
+from ..utils.date_helpers import gregorian_to_persian
+
 
 class RoomTypeEnum(str, Enum):
     """Room type options"""
@@ -99,11 +101,16 @@ class LogSummaryResponse(BaseModel):
     last_detection: Optional[datetime]
     date_range_days: Optional[int] = None    
 
+
+
+
+
 class DetectionLogResponse(BaseModel):
     id: int
     person: str
     confidence: Optional[float] = None
     detection_time: datetime
+    detection_time_persian: Optional[str] = None  # For display
     face_image_url: Optional[str] = None
     video_url: Optional[str] = None
     ref_img_id: Optional[int] = None
@@ -113,6 +120,17 @@ class DetectionLogResponse(BaseModel):
     room_id: Optional[int] = None
     access_granted: Optional[bool] = None
 
+    @validator('detection_time_persian', always=True)
+    def set_persian_datetime(cls, v, values):
+        if 'detection_time' in values and values['detection_time']:
+            return gregorian_to_persian(
+                values['detection_time'], 
+                include_time=True, 
+                persian_numbers=True  # Use Persian digits
+            )
+        return None
+    
+    
     
     class Config:
         from_attributes = True

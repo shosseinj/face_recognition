@@ -4,6 +4,6 @@ FROM face_recognition:v1
 
 
 
-RUN pip install --no-cache  openpyxl
+RUN pip install --no-cache  pytz
 
 

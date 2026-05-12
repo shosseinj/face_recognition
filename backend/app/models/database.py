@@ -14,11 +14,12 @@ from sqlalchemy import (
     Table,
     JSON
 )
+# import pytz
 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import cv2
 import numpy as np
@@ -28,6 +29,7 @@ from ..video_utils import save_video_with_ffmpeg, save_fallback_opencv
 import asyncio
 from typing import Optional
 import base64
+# import pytz
 # ==================== CONFIGURATION ====================
 FACE_STORAGE_DIR = Path("saved_media")
 FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
@@ -164,8 +166,9 @@ class Room(Base):
 
 
 # Session factory
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# local_tz = pytz.timezone('Asia/Tehran')  # or your local timezone
 
 class DetectionLog(Base):
     __tablename__ = "DetectionLogs"
@@ -175,7 +178,7 @@ class DetectionLog(Base):
     person = Column(String(200), nullable=False)
     area = Column(String(200), nullable=True)
     confidence = Column(Float, nullable=True)
-    detection_time = Column(DateTime, default=datetime.now)
+    detection_time = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     face_image_path = Column(String(512), nullable=True)
     video_path = Column(String(512), nullable=True)
     camera_id = Column(Integer, nullable=True)

@@ -147,7 +147,7 @@ if __name__ == "__main__":
     cap = cv2.VideoCapture(0) 
     # cap = cv2.VideoCapture('http://192.168.50.19:8080/video') 
     cap = cv2.VideoCapture('./video6.mp4') 
-    use_camera = cap.isOpened() or True
+    use_camera = cap.isOpened() and False #or True
     
     first_frame = True
     if not use_camera:

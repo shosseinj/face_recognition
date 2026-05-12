@@ -8,7 +8,8 @@ from ..models.database import DetectionLog, Personnel as PersonnelDB
 from ..models.db_functions import get_db
 from ..models.schemas import DetectionLogResponse, DetectionLogCreate
 from fastapi import Query
-from ..utils import get_face_image_url, get_video_url
+from ..utils.utils import get_face_image_url, get_video_url
+from ..utils.date_helpers import persian_date_range, gregorian_to_persian
 # Changed prefix from "/detections" to "/logs"
 router = APIRouter(prefix="/logs", tags=["logs"])
 from typing import Optional
@@ -27,7 +28,7 @@ from typing import Optional
 #     return f"{base_url}/api/v1/logs/{detection_id}/video"
 from enum import Enum
 
-
+import pytz
 from typing import Optional
 
 
@@ -65,22 +66,64 @@ def log_detection(
 
 
 
+from ..utils.date_helpers import gregorian_to_persian, persian_to_gregorian
+from typing import Optional
+
 @router.get("/", response_model=List[DetectionLogResponse])
 def get_logs(
     request: Request, 
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum records to return"),
+    
+    # Persian date filters (new)
+    persian_date_from: Optional[str] = Query(None, description="Start date in Persian format (e.g., 1402/02/22)"),
+    persian_date_to: Optional[str] = Query(None, description="End date in Persian format (e.g., 1402/02/22)"),
+    persian_date: Optional[str] = Query(None, description="Specific date in Persian format (e.g., 1402/02/22)"),
+    
+    # Regular date filters (backward compatible)
+    # start_date: Optional[datetime] = Query(None, description="Start date in ISO format"),
+    # end_date: Optional[datetime] = Query(None, description="End date in ISO format"),
+    
     db: Session = Depends(get_db),
-
-    ):
+):
     """Get all detection logs with face image and video URLs and personnel names if available"""
     
-    # Get all logs
-    logs = db.query(DetectionLog)\
-        .order_by(DetectionLog.detection_time.desc())\
-        .offset(skip)\
-        .limit(limit)\
-        .all()
+    # Start building query
+    query = db.query(DetectionLog)
+    
+    # Apply Persian date filters
+    if persian_date:
+        # Filter by a single Persian date (entire day)
+        utc_start, utc_end = persian_to_gregorian(persian_date, as_time_range=True)
+        query = query.filter(
+            DetectionLog.detection_time >= utc_start,
+            DetectionLog.detection_time <= utc_end
+        )
+    
+    if persian_date_from:
+        utc_start, _ = persian_to_gregorian(persian_date_from, as_time_range=True)
+        query = query.filter(DetectionLog.detection_time >= utc_start)
+    
+    if persian_date_to:
+        _, utc_end = persian_to_gregorian(persian_date_to, as_time_range=True)
+        query = query.filter(DetectionLog.detection_time <= utc_end)
+    
+    # Apply regular date filters (backward compatible)
+    # if start_date:
+    #     if start_date.tzinfo is None:
+    #         start_date = pytz.UTC.localize(start_date)
+    #     query = query.filter(DetectionLog.detection_time >= start_date)
+    
+    # if end_date:
+    #     if end_date.tzinfo is None:
+    #         end_date = pytz.UTC.localize(end_date)
+    #     query = query.filter(DetectionLog.detection_time <= end_date)
+    
+    # Get filtered logs
+    logs = query.order_by(DetectionLog.detection_time.desc())\
+                .offset(skip)\
+                .limit(limit)\
+                .all()
     
     # Get all personnel for quick lookup
     all_personnel = db.query(PersonnelDB).all()
@@ -105,12 +148,20 @@ def get_logs(
                 lname = personnel.lname
                 full_name = f"{personnel.fname} {personnel.lname}".strip()
         
+        # Convert detection_time to Persian format for display
+        persian_detection_time = gregorian_to_persian(
+            log.detection_time, 
+            include_time=True, 
+            persian_numbers=True  # Set to False if you want English digits
+        )
+        
         # Create log response with all fields
         log_response = DetectionLogResponse(
             id=log.id,
             person=log.person,
             confidence=float(log.confidence) if log.confidence else None,
             detection_time=log.detection_time,
+            detection_time_persian=persian_detection_time,  # Add this field
             face_image_url=get_face_image_url(request, log.id) if log.face_image_path else None,
             video_url=get_video_url(request, log.id) if log.video_path else None,
             fname=fname,
@@ -121,6 +172,7 @@ def get_logs(
         result.append(log_response)
     
     return result
+
 
 
 # @router.get("/illegal-access")
@@ -412,274 +464,276 @@ class TimePeriod(str, Enum):
 
 
 
-@router.get("/filter")
-def get_logs_by_date_range(
-    request: Request,
-    period: Optional[TimePeriod] = Query(None, description="Time period: today, last_week, last_month, custom"),
-    from_date: Optional[datetime] = Query(None, description="Start date (required if period=custom)"),
-    to_date: Optional[datetime] = Query(None, description="End date (required if period=custom)"),
-    personnel_id: Optional[str] = Query(None, description="Optional: Filter by personnel id"),
-    db: Session = Depends(get_db)
-):
-    """
-    Get detection logs filtered by predefined periods or custom date range
-    Optionally filter by specific personnel using national code
-    """
+# @router.get("/filter")
+# def get_logs_by_date_range(
+#     request: Request,
+#     period: Optional[TimePeriod] = Query(None, description="Time period: today, last_week, last_month, custom"),
+#     from_date: Optional[datetime] = Query(None, description="Start date (required if period=custom)"),
+#     to_date: Optional[datetime] = Query(None, description="End date (required if period=custom)"),
+#     personnel_id: Optional[str] = Query(None, description="Optional: Filter by personnel id"),
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     Get detection logs filtered by predefined periods or custom date range
+#     Optionally filter by specific personnel using national code
+#     """
     
-    # Set timezone if needed (assuming UTC or configure as needed)
-    now = datetime.now()
+#     # Set timezone if needed (assuming UTC or configure as needed)
+#     now = datetime.now()
     
-    # Handle period-based date filtering
-    if period == TimePeriod.TODAY:
-        from_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        to_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+#     # Handle period-based date filtering
+#     if period == TimePeriod.TODAY:
+#         from_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+#         to_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
         
-    elif period == TimePeriod.LAST_WEEK:
-        from_date = now - timedelta(days=7)
-        to_date = now
+#     elif period == TimePeriod.LAST_WEEK:
+#         from_date = now - timedelta(days=7)
+#         to_date = now
         
-    elif period == TimePeriod.LAST_MONTH:
-        from_date = now - timedelta(days=30)
-        to_date = now
+#     elif period == TimePeriod.LAST_MONTH:
+#         from_date = now - timedelta(days=30)
+#         to_date = now
         
-    elif period == TimePeriod.CUSTOM:
-        # For custom period, from_date and to_date are required
-        if not from_date or not to_date:
-            raise HTTPException(
-                status_code=400,
-                detail="برای دوره سفارشی، تاریخ شروع و پایان الزامی است"
-            )
-        # Validate date range
-        if from_date > to_date:
-            raise HTTPException(
-                status_code=400,
-                detail="from_date must be less than or equal to to_date"
-            )
+#     elif period == TimePeriod.CUSTOM:
+#         # For custom period, from_date and to_date are required
+#         if not from_date or not to_date:
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail="برای دوره سفارشی، تاریخ شروع و پایان الزامی است"
+#             )
+#         # Validate date range
+#         if from_date > to_date:
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail="from_date must be less than or equal to to_date"
+#             )
     
-    elif period is None:
-        # If no period specified, check if dates are provided
-        if from_date and to_date:
-            if from_date > to_date:
-                raise HTTPException(
-                    status_code=400,
-                    detail="from_date must be less than or equal to to_date"
-                )
-        # If neither period nor dates provided, return all logs
-        pass
+#     elif period is None:
+#         # If no period specified, check if dates are provided
+#         if from_date and to_date:
+#             if from_date > to_date:
+#                 raise HTTPException(
+#                     status_code=400,
+#                     detail="from_date must be less than or equal to to_date"
+#                 )
+#         # If neither period nor dates provided, return all logs
+#         pass
     
-    # Build query
-    query = db.query(DetectionLog)
+#     # Build query
+#     query = db.query(DetectionLog)
     
-    # Apply date filters if they exist
-    if from_date:
-        query = query.filter(DetectionLog.detection_time >= from_date)
-    if to_date:
-        query = query.filter(DetectionLog.detection_time <= to_date)
+#     # Apply date filters if they exist
+#     if from_date:
+#         query = query.filter(DetectionLog.detection_time >= from_date)
+#     if to_date:
+#         query = query.filter(DetectionLog.detection_time <= to_date)
     
-    # Apply personnel filter if provided
-    if personnel_id:
-        query = query.filter(DetectionLog.id == personnel_id)
+#     # Apply personnel filter if provided
+#     if personnel_id:
+#         query = query.filter(DetectionLog.id == personnel_id)
     
-    # Get logs ordered by detection time
-    logs = query.order_by(DetectionLog.detection_time.desc()).all()
+#     # Get logs ordered by detection time
+#     logs = query.order_by(DetectionLog.detection_time.desc()).all()
     
-    # Get personnel lookup for names (only if we have personnel codes)
-    personnel_lookup = {}
-    if logs:
-        # Collect unique personnel codes from logs
-        personnel_codes = set(log.person for log in logs if log.person)
-        if personnel_codes:
-            all_personnel = db.query(PersonnelDB).filter(
-                PersonnelDB.national_code.in_(personnel_codes)
-            ).all()
-            personnel_lookup = {p.national_code: p for p in all_personnel}
+#     # Get personnel lookup for names (only if we have personnel codes)
+#     personnel_lookup = {}
+#     if logs:
+#         # Collect unique personnel codes from logs
+#         personnel_codes = set(log.person for log in logs if log.person)
+#         if personnel_codes:
+#             all_personnel = db.query(PersonnelDB).filter(
+#                 PersonnelDB.national_code.in_(personnel_codes)
+#             ).all()
+#             personnel_lookup = {p.national_code: p for p in all_personnel}
     
-    # Prepare response
-    result = []
-    for log in logs:
-        fname = None
-        lname = None
-        full_name = None
+#     # Prepare response
+#     result = []
+#     for log in logs:
+#         fname = None
+#         lname = None
+#         full_name = None
         
-        # Look up personnel if this is a national code
-        if log.person and log.person.isdigit() and len(log.person) == 10:
-            personnel = personnel_lookup.get(log.person)
-            if personnel:
-                fname = personnel.fname
-                lname = personnel.lname
-                full_name = f"{personnel.fname} {personnel.lname}".strip()
+#         # Look up personnel if this is a national code
+#         if log.person and log.person.isdigit() and len(log.person) == 10:
+#             personnel = personnel_lookup.get(log.person)
+#             if personnel:
+#                 fname = personnel.fname
+#                 lname = personnel.lname
+#                 full_name = f"{personnel.fname} {personnel.lname}".strip()
         
-        log_response = DetectionLogResponse(
-            id=log.id,
-            person=log.person,
-            confidence=float(log.confidence) if log.confidence else None,
-            detection_time=log.detection_time,
-            face_image_url=get_face_image_url(request, log.id) if log.face_image_path else None,
-            video_url=get_video_url(request, log.id) if log.video_path else None,
-            fname=fname,
-            lname=lname,
-            full_name=full_name
-        )
-        result.append(log_response)
+#         log_response = DetectionLogResponse(
+#             id=log.id,
+#             person=log.person,
+#             confidence=float(log.confidence) if log.confidence else None,
+#             detection_time=log.detection_time,
+#             face_image_url=get_face_image_url(request, log.id) if log.face_image_path else None,
+#             video_url=get_video_url(request, log.id) if log.video_path else None,
+#             fname=fname,
+#             lname=lname,
+#             full_name=full_name
+#         )
+#         result.append(log_response)
     
-    return result
-@router.get("/filter/summary")
-def get_logs_summary_by_date_range(
-    period: Optional[TimePeriod] = Query(None, description="Time period: today, last_week, last_month, custom"),
-    from_date: Optional[datetime] = Query(None, description="Start date (required if period=custom)"),
-    to_date: Optional[datetime] = Query(None, description="End date (required if period=custom)"),
-    personnel_id: Optional[int] = Query(None, description="Optional: Filter by personnel ID"),
-    db: Session = Depends(get_db)
-):
-    """
-    Get summary statistics for detection logs within a date range
-    Supports predefined periods (today, last_week, last_month) or custom date range
-    Returns counts, unique personnel, and activity metrics
-    """
-    from sqlalchemy import func
+#     return result
+
+
+# @router.get("/filter/summary")
+# def get_logs_summary_by_date_range(
+#     period: Optional[TimePeriod] = Query(None, description="Time period: today, last_week, last_month, custom"),
+#     from_date: Optional[datetime] = Query(None, description="Start date (required if period=custom)"),
+#     to_date: Optional[datetime] = Query(None, description="End date (required if period=custom)"),
+#     personnel_id: Optional[int] = Query(None, description="Optional: Filter by personnel ID"),
+#     db: Session = Depends(get_db)
+# ):
+#     """
+#     Get summary statistics for detection logs within a date range
+#     Supports predefined periods (today, last_week, last_month) or custom date range
+#     Returns counts, unique personnel, and activity metrics
+#     """
+#     from sqlalchemy import func
     
-    # Set timezone if needed
-    now = datetime.now()
+#     # Set timezone if needed
+#     now = datetime.now()
     
-    # Handle period-based date filtering
-    if period == TimePeriod.TODAY:
-        from_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        to_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+#     # Handle period-based date filtering
+#     if period == TimePeriod.TODAY:
+#         from_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+#         to_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
         
-    elif period == TimePeriod.LAST_WEEK:
-        from_date = now - timedelta(days=7)
-        to_date = now
+#     elif period == TimePeriod.LAST_WEEK:
+#         from_date = now - timedelta(days=7)
+#         to_date = now
         
-    elif period == TimePeriod.LAST_MONTH:
-        from_date = now - timedelta(days=30)
-        to_date = now
+#     elif period == TimePeriod.LAST_MONTH:
+#         from_date = now - timedelta(days=30)
+#         to_date = now
         
-    elif period == TimePeriod.CUSTOM:
-        # For custom period, from_date and to_date are required
-        if not from_date or not to_date:
-            raise HTTPException(
-                status_code=400,
-                detail="برای دوره سفارشی، تاریخ شروع و پایان الزامی است"
-            )
-        # Validate date range
-        if from_date > to_date:
-            raise HTTPException(
-                status_code=400,
-                detail="from_date must be less than or equal to to_date"
-            )
+#     elif period == TimePeriod.CUSTOM:
+#         # For custom period, from_date and to_date are required
+#         if not from_date or not to_date:
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail="برای دوره سفارشی، تاریخ شروع و پایان الزامی است"
+#             )
+#         # Validate date range
+#         if from_date > to_date:
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail="from_date must be less than or equal to to_date"
+#             )
     
-    elif period is None:
-        # If no period specified, check if dates are provided
-        if from_date and to_date:
-            if from_date > to_date:
-                raise HTTPException(
-                    status_code=400,
-                    detail="from_date must be less than or equal to to_date"
-                )
-        # If neither period nor dates provided, use all data
-        pass
+#     elif period is None:
+#         # If no period specified, check if dates are provided
+#         if from_date and to_date:
+#             if from_date > to_date:
+#                 raise HTTPException(
+#                     status_code=400,
+#                     detail="from_date must be less than or equal to to_date"
+#                 )
+#         # If neither period nor dates provided, use all data
+#         pass
     
-    # Build query
-    query = db.query(DetectionLog)
+#     # Build query
+#     query = db.query(DetectionLog)
     
-    # Apply date filters if they exist
-    if from_date:
-        query = query.filter(DetectionLog.detection_time >= from_date)
-    if to_date:
-        query = query.filter(DetectionLog.detection_time <= to_date)
+#     # Apply date filters if they exist
+#     if from_date:
+#         query = query.filter(DetectionLog.detection_time >= from_date)
+#     if to_date:
+#         query = query.filter(DetectionLog.detection_time <= to_date)
     
-    # Apply personnel filter if provided (using ID)
-    if personnel_id:
-        # First get the personnel's national code
-        personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
-        if not personnel:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Personnel with ID {personnel_id} not found"
-            )
-        query = query.filter(DetectionLog.person == personnel.national_code)
+#     # Apply personnel filter if provided (using ID)
+#     if personnel_id:
+#         # First get the personnel's national code
+#         personnel = db.query(PersonnelDB).filter(PersonnelDB.id == personnel_id).first()
+#         if not personnel:
+#             raise HTTPException(
+#                 status_code=404,
+#                 detail=f"Personnel with ID {personnel_id} not found"
+#             )
+#         query = query.filter(DetectionLog.person == personnel.national_code)
     
-    # Get overall statistics
-    stats = query.with_entities(
-        func.count(DetectionLog.id).label('total_detections'),
-        func.avg(DetectionLog.confidence).label('avg_confidence'),
-        func.min(DetectionLog.detection_time).label('first_detection'),
-        func.max(DetectionLog.detection_time).label('last_detection')
-    ).first()
+#     # Get overall statistics
+#     stats = query.with_entities(
+#         func.count(DetectionLog.id).label('total_detections'),
+#         func.avg(DetectionLog.confidence).label('avg_confidence'),
+#         func.min(DetectionLog.detection_time).label('first_detection'),
+#         func.max(DetectionLog.detection_time).label('last_detection')
+#     ).first()
     
-    # Get unique personnel count
-    unique_personnel = query.with_entities(DetectionLog.person).distinct().count()
+#     # Get unique personnel count
+#     unique_personnel = query.with_entities(DetectionLog.person).distinct().count()
     
-    # Get detection counts by personnel (top 10)
-    personnel_counts = query.with_entities(
-        DetectionLog.person,
-        func.count(DetectionLog.id).label('detection_count')
-    ).group_by(DetectionLog.person).order_by(func.count(DetectionLog.id).desc()).limit(10).all()
+#     # Get detection counts by personnel (top 10)
+#     personnel_counts = query.with_entities(
+#         DetectionLog.person,
+#         func.count(DetectionLog.id).label('detection_count')
+#     ).group_by(DetectionLog.person).order_by(func.count(DetectionLog.id).desc()).limit(10).all()
     
-    # Get personnel names for the top list (optimized query)
-    personnel_lookup = {}
-    if personnel_counts:
-        # Collect all personnel codes from the top list
-        personnel_codes = [code for code, _ in personnel_counts if code]
-        if personnel_codes:
-            all_personnel = db.query(PersonnelDB).filter(
-                PersonnelDB.national_code.in_(personnel_codes)
-            ).all()
-            personnel_lookup = {p.national_code: p for p in all_personnel}
+#     # Get personnel names for the top list (optimized query)
+#     personnel_lookup = {}
+#     if personnel_counts:
+#         # Collect all personnel codes from the top list
+#         personnel_codes = [code for code, _ in personnel_counts if code]
+#         if personnel_codes:
+#             all_personnel = db.query(PersonnelDB).filter(
+#                 PersonnelDB.national_code.in_(personnel_codes)
+#             ).all()
+#             personnel_lookup = {p.national_code: p for p in all_personnel}
     
-    top_personnel_list = []
-    for person_code, count in personnel_counts:
-        personnel = personnel_lookup.get(person_code)
-        top_personnel_list.append({
-            "personnel_id": personnel.id if personnel else None,
-            "national_code": person_code,
-            "full_name": f"{personnel.fname} {personnel.lname}".strip() if personnel else "Unknown",
-            "detection_count": count
-        })
+#     top_personnel_list = []
+#     for person_code, count in personnel_counts:
+#         personnel = personnel_lookup.get(person_code)
+#         top_personnel_list.append({
+#             "personnel_id": personnel.id if personnel else None,
+#             "national_code": person_code,
+#             "full_name": f"{personnel.fname} {personnel.lname}".strip() if personnel else "Unknown",
+#             "detection_count": count
+#         })
     
-    # Get daily breakdown
-    daily_counts = query.with_entities(
-        func.date(DetectionLog.detection_time).label('date'),
-        func.count(DetectionLog.id).label('count')
-    ).group_by(func.date(DetectionLog.detection_time)).order_by(func.date(DetectionLog.detection_time)).all()
+#     # Get daily breakdown
+#     daily_counts = query.with_entities(
+#         func.date(DetectionLog.detection_time).label('date'),
+#         func.count(DetectionLog.id).label('count')
+#     ).group_by(func.date(DetectionLog.detection_time)).order_by(func.date(DetectionLog.detection_time)).all()
     
-    # Get hourly breakdown
-    hourly_counts = query.with_entities(
-        func.strftime('%H', DetectionLog.detection_time).label('hour'),
-        func.count(DetectionLog.id).label('count')
-    ).group_by(func.strftime('%H', DetectionLog.detection_time)).order_by('hour').all()
+#     # Get hourly breakdown
+#     hourly_counts = query.with_entities(
+#         func.strftime('%H', DetectionLog.detection_time).label('hour'),
+#         func.count(DetectionLog.id).label('count')
+#     ).group_by(func.strftime('%H', DetectionLog.detection_time)).order_by('hour').all()
     
-    # Calculate date range info
-    date_range_info = {
-        "from": from_date.isoformat() if from_date else (
-            stats.first_detection.isoformat() if stats.first_detection else None
-        ),
-        "to": to_date.isoformat() if to_date else (
-            stats.last_detection.isoformat() if stats.last_detection else None
-        ),
-        "days": (to_date - from_date).days if (from_date and to_date) else None
-    }
+#     # Calculate date range info
+#     date_range_info = {
+#         "from": from_date.isoformat() if from_date else (
+#             stats.first_detection.isoformat() if stats.first_detection else None
+#         ),
+#         "to": to_date.isoformat() if to_date else (
+#             stats.last_detection.isoformat() if stats.last_detection else None
+#         ),
+#         "days": (to_date - from_date).days if (from_date and to_date) else None
+#     }
     
-    return {
-        "period": period.value if period else "all_time",
-        "date_range": date_range_info,
-        "overall_stats": {
-            "total_detections": stats.total_detections or 0,
-            "unique_personnel": unique_personnel,
-            "average_confidence": round(stats.avg_confidence, 2) if stats.avg_confidence else 0,
-            "first_detection": stats.first_detection.isoformat() if stats.first_detection else None,
-            "last_detection": stats.last_detection.isoformat() if stats.last_detection else None
-        },
-        "top_personnel": top_personnel_list,
-        "daily_breakdown": [
-            {"date": str(day.date), "detections": day.count}
-            for day in daily_counts
-        ],
-        "hourly_breakdown": [
-            {"hour": int(hour.hour), "detections": hour.count}
-            for hour in hourly_counts
-        ]
-    }
+#     return {
+#         "period": period.value if period else "all_time",
+#         "date_range": date_range_info,
+#         "overall_stats": {
+#             "total_detections": stats.total_detections or 0,
+#             "unique_personnel": unique_personnel,
+#             "average_confidence": round(stats.avg_confidence, 2) if stats.avg_confidence else 0,
+#             "first_detection": stats.first_detection.isoformat() if stats.first_detection else None,
+#             "last_detection": stats.last_detection.isoformat() if stats.last_detection else None
+#         },
+#         "top_personnel": top_personnel_list,
+#         "daily_breakdown": [
+#             {"date": str(day.date), "detections": day.count}
+#             for day in daily_counts
+#         ],
+#         "hourly_breakdown": [
+#             {"hour": int(hour.hour), "detections": hour.count}
+#             for hour in hourly_counts
+#         ]
+#     }
 
 
 @router.get("/filter/export")
@@ -769,19 +823,19 @@ async def export_logs_by_date_range(
         )
         
 
-@router.get("/by-room/{room_id}")
-def get_detections_by_room(
-    room_id: int,
-    limit: int = Query(50, ge=1, le=500),
-    db: Session = Depends(get_db)
-):
-    """Get detection logs for a specific room"""
-    detections = db.query(DetectionLog)\
-        .filter(DetectionLog.room_id == room_id)\
-        .order_by(DetectionLog.detection_time.desc())\
-        .limit(limit)\
-        .all()
-    return detections
+# @router.get("/by-room/{room_id}")
+# def get_detections_by_room(
+#     room_id: int,
+#     limit: int = Query(50, ge=1, le=500),
+#     db: Session = Depends(get_db)
+# ):
+#     """Get detection logs for a specific room"""
+#     detections = db.query(DetectionLog)\
+#         .filter(DetectionLog.room_id == room_id)\
+#         .order_by(DetectionLog.detection_time.desc())\
+#         .limit(limit)\
+#         .all()
+#     return detections
         
         
 # from fastapi import APIRouter, Depends, Request, HTTPException

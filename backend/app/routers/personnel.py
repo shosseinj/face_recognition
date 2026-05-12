@@ -45,7 +45,7 @@ from ..models.database import DetectionLog
 from ..models.schemas import DetectionLogResponse
 from typing import Optional
 # from .detections import get_face_image_url, get_video_url
-from ..utils import get_face_image_url, get_video_url
+from ..utils.utils import get_face_image_url, get_video_url
 # from Face_ai.main import DeletePointVD, FaceEmbeddingWithoutDetection,  FaceEmbeddingCropping
 from ..models.schemas import (
     DetectionLogCreate, DetectionLogResponse, 
@@ -55,7 +55,7 @@ from ..models.database import DetectionLog, Personnel as PersonnelDB, PersonnelI
 from ..models.db_functions import get_db
 import numpy as np
 import zipfile
-from backend.app.utils import convert_image_to_base64
+from backend.app.utils.utils import convert_image_to_base64
 
 from Face_ai.main import ModelManager
 model_mgr = ModelManager()

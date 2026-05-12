@@ -146,42 +146,56 @@ async def save_detection(
                 print(f"♻️  Replacing old detection for '{person}' with higher confidence {confidence:.2f}")
 
         # ==================== CHECK ROOM ACCESS ====================
-        if room_id and not('Unknown' in person):
-            from .database import Personnel, personnel_room_association
+        # Check for unknown person first
+        # Handle access check based on room type
+        if 'Unknown' in person:
+            access_granted = False
+            print(f"⚠️ Unknown person (national code: {person}) - access denied")
             
-            name_parts = person.split(' ', 1)
-            if len(name_parts) >= 2:
-                first_name = name_parts[0]
-                last_name = name_parts[1]
+        elif not room_id:
+            access_granted = None
+            print(f"⚠️ No room ID provided")
+            
+        else:
+            room = db.query(Room).filter(Room.id == room_id).first()
+            
+            if not room:
+                access_granted = False
+                print(f"⚠️ Room {room_id} not found")
                 
+            elif room.room_type == 'public':
+                access_granted = True
+                print(f"✅ PUBLIC ROOM: National code {person} granted access to room {room_id}")
+                
+            elif room.room_type == 'illegal':
+                access_granted = False
+                print(f"❌ ILLEGAL ROOM: National code {person} denied access to room {room_id}")
+                
+            elif room.room_type == 'custom':
                 personnel = db.query(Personnel).filter(
-                    Personnel.fname == first_name,
-                    Personnel.lname == last_name
+                    Personnel.national_code == person
                 ).first()
                 
-                if personnel:
-                    access = db.query(personnel_room_association).filter(
+                if not personnel:
+                    access_granted = False
+                    print(f"⚠️ Personnel not found with national code: {person}")
+                else:
+                    access_exists = db.query(personnel_room_association).filter(
                         personnel_room_association.c.personnel_id == personnel.id,
                         personnel_room_association.c.room_id == room_id
                     ).first()
                     
-                    if access:
-                        access_granted = True
-                        print(f"✅ {person} has access to room {room_id}")
+                    access_granted = bool(access_exists)
+                    if access_exists:
+                        print(f"✅ CUSTOM ROOM: {personnel.fname} {personnel.lname} (national code: {person}) has access to room {room_id}")
                     else:
-                        access_granted = False
-                        print(f"❌ {person} does NOT have access to room {room_id}")
-                else:
-                    access_granted = False
-                    print(f"⚠️ Personnel not found for name: {person}")
+                        print(f"❌ CUSTOM ROOM: {personnel.fname} {personnel.lname} (national code: {person}) does NOT have access to room {room_id}")
             else:
                 access_granted = False
-                print(f"⚠️ Invalid name format: {person}")
-        elif 'Unknown' in person:
-            access_granted = False
-            print(f"⚠️ Unknown person detected - access denied")
-        else:
-            access_granted = None
+                print(f"⚠️ Unknown room type '{room.room_type}' for room {room_id}")
+
+
+
 
         # Save video if frames provided - NOW ASYNC
         if save_video and frames_to_save and len(frames_to_save) > 0:

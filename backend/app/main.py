@@ -44,7 +44,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from .models.db_functions import save_detection_with_face, get_db
-from .models.database import DetectionLog, Personnel
 from .api import router as api_router
 from io import BytesIO  # IMPORT THIS!
 # from Face_ai.main import FrameProcessing, FaceEmbedding, FaceEmbeddingCropping
@@ -787,7 +786,7 @@ async def video_broadcaster():
     try_objs = {}
     sources = [
     # {"type": "cv2", "src": 'http://192.168.50.20:8080/video'},
-    # {"type": "cv2", "src": './video8.mp4'},
+    # {"type": "cv2", "src": './video6.mp4'},
     # {"type": "cv2", "src": 0},
     # {"type": "cv2", "src": './video7.mp4'},
     # {"type": "cv2", "src": './video7.mp4'},

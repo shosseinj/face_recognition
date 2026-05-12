@@ -47,7 +47,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 import cv2
-from backend.app.utils import convert_image_to_base64, get_face_image_url, get_video_url
+from backend.app.utils.utils import convert_image_to_base64, get_face_image_url, get_video_url
 
 
 
