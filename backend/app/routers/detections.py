@@ -13,19 +13,6 @@ from ..utils.date_helpers import persian_date_range, gregorian_to_persian
 # Changed prefix from "/detections" to "/logs"
 router = APIRouter(prefix="/logs", tags=["logs"])
 from typing import Optional
-# def get_face_image_url(request: Request, detection_id: int) -> str | None:
-#     """Generate URL for face image"""
-#     if not detection_id:
-#         return None
-#     base_url = str(request.base_url).rstrip('/')
-#     return f"{base_url}/api/v1/logs/{detection_id}/face"
-
-# def get_video_url(request: Request, detection_id: int) -> str | None:
-#     """Generate URL for video clip"""
-#     if not detection_id:
-#         return None
-#     base_url = str(request.base_url).rstrip('/')
-#     return f"{base_url}/api/v1/logs/{detection_id}/video"
 from enum import Enum
 
 import pytz
@@ -172,6 +159,198 @@ def get_logs(
         result.append(log_response)
     
     return result
+
+
+
+
+@router.get("/{detection_id}/video")
+async def get_detection_video(
+    detection_id: int, 
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Serve video file with range support"""
+    detection = db.query(DetectionLog).filter(DetectionLog.id == detection_id).first()
+    if not detection or not detection.video_path:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    if not os.path.exists(detection.video_path):
+        raise HTTPException(status_code=404, detail="Video file not found")
+    
+    file_size = os.path.getsize(detection.video_path)
+    range_header = request.headers.get("range")
+    
+    # Get filename for Content-Disposition
+    filename = os.path.basename(detection.video_path)
+    
+    # Log for debugging
+    print(f"Serving video: {detection.video_path}, size: {file_size}")
+    print(f"Range header: {range_header}")
+    
+    # Common headers for video streaming
+    common_headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "Content-Type": "video/mp4",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+    
+    if range_header:
+        # Handle range request for video streaming
+        byte_range = range_header.replace("bytes=", "").split("-")
+        start = int(byte_range[0])
+        end = int(byte_range[1]) if byte_range[1] else file_size - 1
+        end = min(end, file_size - 1)
+        content_length = end - start + 1
+        
+        def read_range():
+            with open(detection.video_path, "rb") as video_file:
+                video_file.seek(start)
+                yield video_file.read(min(8192, content_length))
+        
+        headers = {
+            **common_headers,
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(content_length),
+            "Content-Disposition": f"inline; filename=\"{filename}\"",
+        }
+        
+        return StreamingResponse(
+            read_range(),
+            status_code=206,
+            headers=headers
+        )
+    else:
+        def read_file():
+            with open(detection.video_path, "rb") as video_file:
+                while chunk := video_file.read(8192):
+                    yield chunk
+        
+        headers = {
+            **common_headers,
+            "Content-Length": str(file_size),
+            "Content-Disposition": f"inline; filename=\"{filename}\"",
+        }
+        
+        return StreamingResponse(
+            read_file(),
+            status_code=200,
+            headers=headers
+        )
+    
+
+
+
+
+@router.get("/{detection_id}/face")
+async def get_detection_face(detection_id: int, db: Session = Depends(get_db)):
+    """Serve face image"""
+    detection = db.query(DetectionLog).filter(DetectionLog.id == detection_id).first()
+    if not detection or not detection.face_image_path:
+        raise HTTPException(status_code=404, detail="Face image not found")
+    
+    if not os.path.exists(detection.face_image_path):
+        raise HTTPException(status_code=404, detail="Face image file not found")
+    
+    return FileResponse(
+        detection.face_image_path,
+        media_type="image/jpeg",
+        filename=os.path.basename(detection.face_image_path)
+    )
+
+
+
+@router.get("/filter/export")
+async def export_logs_by_date_range(
+    from_date: datetime = Query(..., description="Start date (YYYY-MM-DDTHH:MM:SS)"),
+    to_date: datetime = Query(..., description="End date (YYYY-MM-DDTHH:MM:SS)"),
+    personnel_national_code: str = Query(None, description="Optional: Filter by personnel national code"),
+    format: str = Query("json", description="Export format: json or csv"),
+    db: Session = Depends(get_db)
+):
+    """
+    Export detection logs within a date range to JSON or CSV format
+    """
+    import json
+    import csv
+    from io import StringIO
+    
+    # Validate date range
+    if from_date > to_date:
+        raise HTTPException(
+            status_code=400, 
+            detail="from_date must be less than or equal to to_date"
+        )
+    
+    # Build query
+    query = db.query(DetectionLog).filter(
+        DetectionLog.detection_time >= from_date,
+        DetectionLog.detection_time <= to_date
+    ).order_by(DetectionLog.detection_time.desc())
+    
+    # Apply personnel filter if provided
+    if personnel_national_code:
+        query = query.filter(DetectionLog.person == personnel_national_code)
+    
+    logs = query.all()
+    
+    # Get personnel lookup
+    all_personnel = db.query(PersonnelDB).all()
+    personnel_lookup = {p.national_code: p for p in all_personnel}
+    
+    # Prepare export data
+    export_data = []
+    for log in logs:
+        personnel = personnel_lookup.get(log.person) if log.person else None
+        
+        export_data.append({
+            "id": log.id,
+            "person": log.person,
+            "person_name": f"{personnel.fname} {personnel.lname}".strip() if personnel else "Unknown",
+            "confidence": float(log.confidence) if log.confidence else None,
+            "detection_time": log.detection_time.isoformat() if log.detection_time else None,
+            "face_image_path": log.face_image_path,
+            "video_path": log.video_path
+        })
+    
+    # Export based on format
+    if format.lower() == "csv":
+        # Create CSV
+        output = StringIO()
+        if export_data:
+            writer = csv.DictWriter(output, fieldnames=export_data[0].keys())
+            writer.writeheader()
+            writer.writerows(export_data)
+        
+        csv_content = output.getvalue()
+        output.close()
+        
+        filename = f"detection_logs_{from_date.strftime('%Y%m%d')}_to_{to_date.strftime('%Y%m%d')}.csv"
+        
+        return StreamingResponse(
+            iter([csv_content]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    
+    else:  # JSON format (default)
+        filename = f"detection_logs_{from_date.strftime('%Y%m%d')}_to_{to_date.strftime('%Y%m%d')}.json"
+        
+        return StreamingResponse(
+            iter([json.dumps(export_data, indent=2, ensure_ascii=False)]),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+        
+
 
 
 
@@ -349,106 +528,6 @@ def get_logs(
 
 
 
-@router.get("/{log_id}/video")
-async def get_detection_video(
-    detection_id: int, 
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    """Serve video file with range support"""
-    detection = db.query(DetectionLog).filter(DetectionLog.id == detection_id).first()
-    if not detection or not detection.video_path:
-        raise HTTPException(status_code=404, detail="Video not found")
-    
-    if not os.path.exists(detection.video_path):
-        raise HTTPException(status_code=404, detail="Video file not found")
-    
-    file_size = os.path.getsize(detection.video_path)
-    range_header = request.headers.get("range")
-    
-    # Get filename for Content-Disposition
-    filename = os.path.basename(detection.video_path)
-    
-    # Log for debugging
-    print(f"Serving video: {detection.video_path}, size: {file_size}")
-    print(f"Range header: {range_header}")
-    
-    # Common headers for video streaming
-    common_headers = {
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0",
-        "Content-Type": "video/mp4",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "*",
-    }
-    
-    if range_header:
-        # Handle range request for video streaming
-        byte_range = range_header.replace("bytes=", "").split("-")
-        start = int(byte_range[0])
-        end = int(byte_range[1]) if byte_range[1] else file_size - 1
-        end = min(end, file_size - 1)
-        content_length = end - start + 1
-        
-        def read_range():
-            with open(detection.video_path, "rb") as video_file:
-                video_file.seek(start)
-                yield video_file.read(min(8192, content_length))
-        
-        headers = {
-            **common_headers,
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Content-Length": str(content_length),
-            "Content-Disposition": f"inline; filename=\"{filename}\"",
-        }
-        
-        return StreamingResponse(
-            read_range(),
-            status_code=206,
-            headers=headers
-        )
-    else:
-        def read_file():
-            with open(detection.video_path, "rb") as video_file:
-                while chunk := video_file.read(8192):
-                    yield chunk
-        
-        headers = {
-            **common_headers,
-            "Content-Length": str(file_size),
-            "Content-Disposition": f"inline; filename=\"{filename}\"",
-        }
-        
-        return StreamingResponse(
-            read_file(),
-            status_code=200,
-            headers=headers
-        )
-    
-
-
-
-
-@router.get("{log_id}/face")
-async def get_detection_face(detection_id: int, db: Session = Depends(get_db)):
-    """Serve face image"""
-    detection = db.query(DetectionLog).filter(DetectionLog.id == detection_id).first()
-    if not detection or not detection.face_image_path:
-        raise HTTPException(status_code=404, detail="Face image not found")
-    
-    if not os.path.exists(detection.face_image_path):
-        raise HTTPException(status_code=404, detail="Face image file not found")
-    
-    return FileResponse(
-        detection.face_image_path,
-        media_type="image/jpeg",
-        filename=os.path.basename(detection.face_image_path)
-    )
-
-
 
 
 
@@ -456,11 +535,11 @@ async def get_detection_face(detection_id: int, db: Session = Depends(get_db)):
 ###########
 
 
-class TimePeriod(str, Enum):
-    TODAY = "today"
-    LAST_WEEK = "last_week"
-    LAST_MONTH = "last_month"
-    CUSTOM = "custom"
+# class TimePeriod(str, Enum):
+#     TODAY = "today"
+#     LAST_WEEK = "last_week"
+#     LAST_MONTH = "last_month"
+#     CUSTOM = "custom"
 
 
 
@@ -736,92 +815,6 @@ class TimePeriod(str, Enum):
 #     }
 
 
-@router.get("/filter/export")
-async def export_logs_by_date_range(
-    from_date: datetime = Query(..., description="Start date (YYYY-MM-DDTHH:MM:SS)"),
-    to_date: datetime = Query(..., description="End date (YYYY-MM-DDTHH:MM:SS)"),
-    personnel_national_code: str = Query(None, description="Optional: Filter by personnel national code"),
-    format: str = Query("json", description="Export format: json or csv"),
-    db: Session = Depends(get_db)
-):
-    """
-    Export detection logs within a date range to JSON or CSV format
-    """
-    import json
-    import csv
-    from io import StringIO
-    
-    # Validate date range
-    if from_date > to_date:
-        raise HTTPException(
-            status_code=400, 
-            detail="from_date must be less than or equal to to_date"
-        )
-    
-    # Build query
-    query = db.query(DetectionLog).filter(
-        DetectionLog.detection_time >= from_date,
-        DetectionLog.detection_time <= to_date
-    ).order_by(DetectionLog.detection_time.desc())
-    
-    # Apply personnel filter if provided
-    if personnel_national_code:
-        query = query.filter(DetectionLog.person == personnel_national_code)
-    
-    logs = query.all()
-    
-    # Get personnel lookup
-    all_personnel = db.query(PersonnelDB).all()
-    personnel_lookup = {p.national_code: p for p in all_personnel}
-    
-    # Prepare export data
-    export_data = []
-    for log in logs:
-        personnel = personnel_lookup.get(log.person) if log.person else None
-        
-        export_data.append({
-            "id": log.id,
-            "person": log.person,
-            "person_name": f"{personnel.fname} {personnel.lname}".strip() if personnel else "Unknown",
-            "confidence": float(log.confidence) if log.confidence else None,
-            "detection_time": log.detection_time.isoformat() if log.detection_time else None,
-            "face_image_path": log.face_image_path,
-            "video_path": log.video_path
-        })
-    
-    # Export based on format
-    if format.lower() == "csv":
-        # Create CSV
-        output = StringIO()
-        if export_data:
-            writer = csv.DictWriter(output, fieldnames=export_data[0].keys())
-            writer.writeheader()
-            writer.writerows(export_data)
-        
-        csv_content = output.getvalue()
-        output.close()
-        
-        filename = f"detection_logs_{from_date.strftime('%Y%m%d')}_to_{to_date.strftime('%Y%m%d')}.csv"
-        
-        return StreamingResponse(
-            iter([csv_content]),
-            media_type="text/csv",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
-        )
-    
-    else:  # JSON format (default)
-        filename = f"detection_logs_{from_date.strftime('%Y%m%d')}_to_{to_date.strftime('%Y%m%d')}.json"
-        
-        return StreamingResponse(
-            iter([json.dumps(export_data, indent=2, ensure_ascii=False)]),
-            media_type="application/json",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
-        )
-        
 
 # @router.get("/by-room/{room_id}")
 # def get_detections_by_room(
