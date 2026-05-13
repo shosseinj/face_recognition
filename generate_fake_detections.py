@@ -17,8 +17,7 @@ sys.path.append(r"C:\Users\mohammadloo.r\Desktop\ai")
 
 # Import your models and functions
 from backend.app.models.database import DetectionLog, Personnel, Base, FACE_STORAGE_DIR
-from backend.app.video_utils import save_video_with_ffmpeg
-
+from backend.app.utils.video_utils import save_video_with_ffmpeg
 # Database connection - FIXED: Create engine first!
 params = urllib.parse.quote_plus(
     "DRIVER={ODBC Driver 17 for SQL Server};"

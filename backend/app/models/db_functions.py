@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 import uuid
-from ..video_utils import save_video_with_ffmpeg, save_fallback_opencv
+from ..utils.video_utils import save_video_with_ffmpeg, save_fallback_opencv
 # ==================== CONFIGURATION ====================
 FACE_STORAGE_DIR = Path("saved_media")
 FACE_STORAGE_DIR.mkdir(exist_ok=True, parents=True)
