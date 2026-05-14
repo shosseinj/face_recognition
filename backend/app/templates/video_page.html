@@ -282,254 +282,293 @@
     </div>
 
     <script>
-      // Use the current host instead of hardcoded 127.0.0.1
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.host;
-      const wsUrl = `${protocol}//${host}/ws/0`;
+  // Use the current host instead of hardcoded 127.0.0.1
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = window.location.host;
+  const wsUrl = `${protocol}//${host}/ws/0`;
+  
+  console.log("Connecting to WebSocket:", wsUrl);
+  console.log("Current location:", window.location.href);
+  
+  let ws = null;
+  let reconnectAttempts = 0;
+  const maxReconnectAttempts = 5;
+  
+  function connectWebSocket() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      console.log("WebSocket already connected");
+      return;
+    }
+    
+    updateStatus('connecting', 'Connecting...');
+    
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = "blob";
+    
+    ws.onopen = () => {
+      console.log("✅ WebSocket connected");
+      updateStatus('connected', 'Connected');
+      reconnectAttempts = 0;
+    };
+    
+    ws.onclose = () => {
+      console.log("❌ WebSocket disconnected");
+      updateStatus('disconnected', 'Disconnected');
       
-      console.log("Connecting to WebSocket:", wsUrl);
-      console.log("Current location:", window.location.href);
+      // Attempt to reconnect
+      if (reconnectAttempts < maxReconnectAttempts) {
+        reconnectAttempts++;
+        console.log(`Reconnecting in 3 seconds... (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+        setTimeout(connectWebSocket, 3000);
+      } else {
+        console.log("Max reconnection attempts reached");
+        updateStatus('disconnected', 'Disconnected (failed to reconnect)');
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+      updateStatus('disconnected', 'Error');
+    };
+    
+    ws.onmessage = (e) => {
+      // VIDEO FRAME
+      if (e.data instanceof Blob) {
+        const imgElement = document.getElementById("v");
+        const url = URL.createObjectURL(e.data);
+        imgElement.onload = () => URL.revokeObjectURL(url);
+        imgElement.src = url;
+        return;
+      }
       
-      let ws = null;
-      let reconnectAttempts = 0;
-      const maxReconnectAttempts = 5;
-      
-      function connectWebSocket() {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          console.log("WebSocket already connected");
-          return;
-        }
+      // JSON DATA
+      try {
+        const data = JSON.parse(e.data);
+        console.log("Received data type:", data.type);
         
-        updateStatus('connecting', 'Connecting...');
-        
-        ws = new WebSocket(wsUrl);
-        ws.binaryType = "blob";
-        
-        ws.onopen = () => {
-          console.log("✅ WebSocket connected");
-          updateStatus('connected', 'Connected');
-          reconnectAttempts = 0;
-        };
-        
-        ws.onclose = () => {
-          console.log("❌ WebSocket disconnected");
-          updateStatus('disconnected', 'Disconnected');
+        if (data.type === "initial_detections") {
+          // First time - populate the detection list
+          console.log(`📋 Received initial ${data.detections.length} detections`);
+          currentDetections = data.detections;
+          updateLogsDisplay(data.detections);
           
-          // Attempt to reconnect
-          if (reconnectAttempts < maxReconnectAttempts) {
-            reconnectAttempts++;
-            console.log(`Reconnecting in 3 seconds... (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
-            setTimeout(connectWebSocket, 3000);
-          } else {
-            console.log("Max reconnection attempts reached");
-            updateStatus('disconnected', 'Disconnected (failed to reconnect)');
-          }
-        };
-        
-        ws.onerror = (error) => {
-          console.error("WebSocket error:", error);
-          updateStatus('disconnected', 'Error');
-        };
-        
-        ws.onmessage = (e) => {
-          // VIDEO FRAME
-          if (e.data instanceof Blob) {
-            const imgElement = document.getElementById("v");
-            const url = URL.createObjectURL(e.data);
-            imgElement.onload = () => URL.revokeObjectURL(url);
-            imgElement.src = url;
-            return;
-          }
+          // No animation for initial load
+        } 
+        else if (data.type === "detections_update") {
+          // Update existing detection list
+          console.log(`🔄 Received detections update: ${data.detections.length} items`);
+          currentDetections = data.detections;
+          updateLogsDisplay(data.detections);
           
-          // JSON DATA
-          try {
-            const data = JSON.parse(e.data);
-            console.log("Received data:", data.type);
-            
-            if (data.type === "new_detection") {
-              // Update the logs display
-              logsContainer.innerHTML = data.detection
-                .map((log) => formatLogEntry(log))
-                .join("");
-            } else if (data.type === "video_metadata") {
-              if (data.persons && data.persons.length) {
-                metadataDiv.innerHTML = `
-                  <span class="status-badge status-connected"></span>
-                  <span>Connected - Detected: ${data.persons.join(", ")}</span>
-                `;
-              } else {
-                metadataDiv.innerHTML = `
-                  <span class="status-badge status-connected"></span>
-                  <span>Connected - No faces detected</span>
-                `;
-              }
-            } else if (data.type === "error") {
-              console.error("Server error:", data.message);
-              metadataDiv.innerHTML = `
-                <span class="status-badge status-disconnected"></span>
-                <span>Error: ${data.message}</span>
-              `;
+          // Highlight the newest detection (first item usually)
+          if (data.detections.length > 0) {
+            const newestId = data.detections[0].id;
+            const newestElement = document.getElementById(`log-${newestId}`);
+            if (newestElement) {
+              newestElement.classList.add('new-detection');
+              setTimeout(() => {
+                newestElement.classList.remove('new-detection');
+              }, 1500);
             }
-          } catch (error) {
-            console.error("Error parsing JSON:", error);
           }
-        };
-      }
-      
-      function updateStatus(status, text) {
-        const statusBadge = document.getElementById("statusBadge");
-        const statusText = document.getElementById("statusText");
-        
-        statusBadge.className = `status-badge status-${status}`;
-        statusText.textContent = text;
-        
-        metadataDiv.innerHTML = `
-          <span class="status-badge status-${status}"></span>
-          <span>${text}</span>
-        `;
-      }
-      
-      function disconnectWebSocket() {
-        if (ws) {
-          ws.close();
-          ws = null;
+        } 
+        else if (data.type === "video_metadata") {
+          // Update video overlay with current frame detections
+          if (data.persons && data.persons.length) {
+            const personsList = data.persons.map((p, idx) => {
+              const score = data.scores && data.scores[idx] ? (data.scores[idx] * 100).toFixed(1) : '';
+              return `${p}${score ? ` (${score}%)` : ''}`;
+            }).join(", ");
+            
+            metadataDiv.innerHTML = `
+              <span class="status-badge status-connected"></span>
+              <span>Connected - Detected: ${personsList}</span>
+            `;
+          } else {
+            metadataDiv.innerHTML = `
+              <span class="status-badge status-connected"></span>
+              <span>Connected - No faces detected</span>
+            `;
+          }
+        } 
+        else if (data.type === "error") {
+          console.error("Server error:", data.message);
+          metadataDiv.innerHTML = `
+            <span class="status-badge status-disconnected"></span>
+            <span>Error: ${data.message}</span>
+          `;
         }
-        updateStatus('disconnected', 'Disconnected');
+      } catch (error) {
+        console.error("Error parsing JSON:", error);
       }
-      
-      function reconnectWebSocket() {
-        disconnectWebSocket();
-        setTimeout(connectWebSocket, 1000);
-      }
-      
-      const logsContainer = document.getElementById("logs-container");
-      const metadataDiv = document.getElementById("metadata");
-      const imageModal = document.getElementById("imageModal");
-      const modalImage = document.getElementById("modalImage");
-      const videoModal = document.getElementById("videoModal");
-      const modalVideo = document.getElementById("modalVideo");
-      const videoInfo = document.getElementById("videoInfo");
+    };
+  }
+  
+  function updateStatus(status, text) {
+    const statusBadge = document.getElementById("statusBadge");
+    const statusText = document.getElementById("statusText");
+    
+    statusBadge.className = `status-badge status-${status}`;
+    statusText.textContent = text;
+    
+    metadataDiv.innerHTML = `
+      <span class="status-badge status-${status}"></span>
+      <span>${text}</span>
+    `;
+  }
+  
+  function updateLogsDisplay(detections) {
+    // Display all detections (up to whatever limit server sends)
+    logsContainer.innerHTML = detections
+      .map((log) => formatLogEntry(log))
+      .join("");
+  }
+  
+  function disconnectWebSocket() {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    updateStatus('disconnected', 'Disconnected');
+  }
+  
+  function reconnectWebSocket() {
+    disconnectWebSocket();
+    setTimeout(connectWebSocket, 1000);
+  }
+  
+  const logsContainer = document.getElementById("logs-container");
+  const metadataDiv = document.getElementById("metadata");
+  const imageModal = document.getElementById("imageModal");
+  const modalImage = document.getElementById("modalImage");
+  const videoModal = document.getElementById("videoModal");
+  const modalVideo = document.getElementById("modalVideo");
+  const videoInfo = document.getElementById("videoInfo");
 
-      let currentDetections = [];
+  let currentDetections = [];
 
-      function formatLogEntry(log) {
-        let imageHtml = "";
-        if (log.face_image_base64) {
-          imageHtml = `<img class="face-image"
-                        src="data:image/jpeg;base64,${log.face_image_base64}"
-                        onclick="showImage(this.src); event.stopPropagation()">`;
-        } else {
-          imageHtml = `<div class="no-image">No Image</div>`;
-        }
+  function formatLogEntry(log) {
+    let imageHtml = "";
+    if (log.face_image_base64) {
+      imageHtml = `<img class="face-image"
+                    src="data:image/jpeg;base64,${log.face_image_base64}"
+                    onclick="showImage(this.src); event.stopPropagation()">`;
+    } else {
+      imageHtml = `<div class="no-image">No Image</div>`;
+    }
 
-        // Use full_name if available, otherwise fall back to person (national code)
-        const displayName = log.full_name || log.person || 'Unknown';
+    // Use full_name if available, otherwise fall back to person (national code)
+    const displayName = log.full_name || log.person || 'Unknown';
+    
+    // Add area if available
+    const areaInfo = log.area && log.area !== 'بدون ناحیه' ? `<span style="font-size: 11px; color: #666; margin-left: 8px;">📍 ${log.area}</span>` : '';
 
-        // Add video indicator if video URL exists
-        let videoIndicator = "";
-        if (log.video_url) {
-          videoIndicator = `<span class="video-indicator" onclick="playVideo('${log.video_url}', '${displayName}', '${log.detection_time}'); event.stopPropagation()">▶</span>`;
-        }
+    // Add video indicator if video URL exists
+    let videoIndicator = "";
+    if (log.video_url) {
+      videoIndicator = `<span class="video-indicator" onclick="playVideo('${log.video_url}', '${displayName}', '${log.detection_time}'); event.stopPropagation()">▶</span>`;
+    }
 
-        const d = new Date(log.detection_time);
-        const time = d.toLocaleTimeString();
-        const date = d.toLocaleDateString();
+    const d = new Date(log.detection_time);
+    const time = d.toLocaleTimeString();
+    const date = d.toLocaleDateString();
 
-        return `
-        <div class="log-entry" id="log-${log.id}" onclick="playVideo('${log.video_url}', '${displayName}', '${log.detection_time}')">
-            ${imageHtml}
-            <div style="flex:1;">
+    return `
+    <div class="log-entry" id="log-${log.id}" onclick="playVideo('${log.video_url}', '${displayName}', '${log.detection_time}')">
+        ${imageHtml}
+        <div style="flex:1;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
                 <div style="display: flex; align-items: center;">
                     <div class="person-name">${escapeHtml(displayName)}</div>
-                    ${videoIndicator}
+                    ${areaInfo}
                 </div>
-                <div class="confidence">
-                    Confidence: ${(log.confidence * 100).toFixed(1)}%
-                </div>
-                <div class="timestamp">${date} ${time}</div>
+                ${videoIndicator}
             </div>
+            <div class="confidence">
+                Confidence: ${(log.confidence * 100).toFixed(1)}%
+            </div>
+            <div class="timestamp">${date} ${time}</div>
         </div>
-        `;
-      }
-      
-      function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-      }
+    </div>
+    `;
+  }
+  
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
 
-      function showImage(src) {
-        modalImage.src = src;
-        imageModal.style.display = "flex";
-      }
+  function showImage(src) {
+    modalImage.src = src;
+    imageModal.style.display = "flex";
+  }
 
-      function closeImageModal() {
-        imageModal.style.display = "none";
-      }
-      
-      function playVideo(videoUrl, personName, detectionTime) {
-        console.log("Attempting to play video:", videoUrl);
+  function closeImageModal() {
+    imageModal.style.display = "none";
+  }
+  
+  function playVideo(videoUrl, personName, detectionTime) {
+    console.log("Attempting to play video:", videoUrl);
 
-        if (!videoUrl) {
-          alert("No video available for this detection");
-          return;
-        }
+    if (!videoUrl) {
+      alert("No video available for this detection");
+      return;
+    }
 
-        // Format the date for display
-        const d = new Date(detectionTime);
-        const formattedTime = d.toLocaleString();
+    // Format the date for display
+    const d = new Date(detectionTime);
+    const formattedTime = d.toLocaleString();
 
-        videoInfo.innerHTML = `${escapeHtml(personName)} - ${formattedTime}`;
+    videoInfo.innerHTML = `${escapeHtml(personName)} - ${formattedTime}`;
 
-        // Set the video source
-        const videoSource = document.getElementById("videoSource");
-        videoSource.src = videoUrl;
+    // Set the video source
+    const videoSource = document.getElementById("videoSource");
+    videoSource.src = videoUrl;
 
-        // Load and play
-        modalVideo.load();
-        videoModal.style.display = "flex";
+    // Load and play
+    modalVideo.load();
+    videoModal.style.display = "flex";
 
-        modalVideo.play().catch((e) => {
-          console.error("Error playing video:", e);
-          alert(
-            "Could not play video. The video file might not be accessible.",
-          );
-        });
-      }
+    modalVideo.play().catch((e) => {
+      console.error("Error playing video:", e);
+      alert(
+        "Could not play video. The video file might not be accessible.",
+      );
+    });
+  }
 
-      function closeVideoModal() {
-        modalVideo.pause();
-        modalVideo.currentTime = 0;
-        videoModal.style.display = "none";
-        const videoSource = document.getElementById("videoSource");
-        videoSource.src = ""; // Clear source
-        modalVideo.load(); // Reload to clear
-      }
+  function closeVideoModal() {
+    modalVideo.pause();
+    modalVideo.currentTime = 0;
+    videoModal.style.display = "none";
+    const videoSource = document.getElementById("videoSource");
+    videoSource.src = ""; // Clear source
+    modalVideo.load(); // Reload to clear
+  }
 
-      // Close modals when clicking outside
-      imageModal.onclick = (e) => {
-        if (e.target === imageModal) closeImageModal();
-      };
+  // Close modals when clicking outside
+  imageModal.onclick = (e) => {
+    if (e.target === imageModal) closeImageModal();
+  };
 
-      videoModal.onclick = (e) => {
-        if (e.target === videoModal) closeVideoModal();
-      };
+  videoModal.onclick = (e) => {
+    if (e.target === videoModal) closeVideoModal();
+  };
 
-      // Keyboard shortcuts
-      document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") {
-          closeImageModal();
-          closeVideoModal();
-        }
-      });
+  // Keyboard shortcuts
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeImageModal();
+      closeVideoModal();
+    }
+  });
 
-      // Prevent video modal from closing when clicking on video
-      modalVideo.onclick = (e) => {
-        e.stopPropagation();
-      };
-      
-      // Auto-connect when page loads
-      connectWebSocket();
-    </script>
-  </body>
-</html>
+  // Prevent video modal from closing when clicking on video
+  modalVideo.onclick = (e) => {
+    e.stopPropagation();
+  };
+  
+  // Auto-connect when page loads
+  connectWebSocket();
+</script>

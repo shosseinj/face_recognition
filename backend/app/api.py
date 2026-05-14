@@ -302,7 +302,7 @@ router.include_router(rooms.router)
 @router.get("/extract-frames/{detection_id}/")
 async def extract_frames_from_detection_video(
     detection_id: int,
-    frame_interval: int = Query(30, description="Extract every Nth frame"),
+    frame_interval: int = Query(2, description="Extract every Nth frame"),
     max_frames: Optional[int] = Query(None, description="Maximum number of frames to extract"),
     db: Session = Depends(get_db)
 ):

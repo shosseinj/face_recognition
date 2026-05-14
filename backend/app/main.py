@@ -105,9 +105,9 @@ app.include_router(api_router, prefix="/api/v1")
 # app.include_router(router, prefix="/api/v1")
 
 class Config:
-    RTSP_URL = "rtsp://Jafari:Asd@98500@192.168.110.20:554/Streaming/Channels/301" # saloon
+    # RTSP_URL = "rtsp://Jafari:Asd@98500@192.168.110.20:554/Streaming/Channels/301" # saloon
 
-    # RTSP_URL = "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"
+    RTSP_URL = "rtsp://Jafari:Asd@98500@192.168.110.14:554/Streaming/Channels/101"
     BASE_URL = "http://192.168.10.9:9000"
     CLIP_LENGTH = 100
     HALF_CLIP = CLIP_LENGTH // 2
@@ -311,6 +311,9 @@ async def handle_camera_switch(websocket: WebSocket, new_camera_id: str):
 async def websocket_endpoint(websocket: WebSocket, camera_id: str):
     """Client connects to specific camera feed"""
     await manager.connect(websocket, camera_id)
+    # 📌 Send initial detection logs when client connects
+    await send_initial_detections(websocket)
+
     try:
         # Keep connection alive
         while True:
@@ -323,6 +326,86 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
     except WebSocketDisconnect:
         await manager.disconnect(websocket)
 
+
+async def send_initial_detections(websocket: WebSocket):
+    """Send last 20 detections to a newly connected client"""
+    offset = 0
+    limit = 20
+    db = next(get_db())
+    try:
+        # Get all logs
+        logs = db.query(DetectionLog)\
+            .order_by(DetectionLog.detection_time.desc())\
+            .offset(offset)\
+            .limit(limit)\
+            .all()
+        
+        # Get all personnel for quick lookup
+        all_personnel = db.query(Personnel).all()
+        all_personnel_image = db.query(PersonnelImage).all()
+        personnel_lookup = {p.national_code: p for p in all_personnel}
+        
+        logs_data = []
+        base_url = config.BASE_URL
+        
+        for log in logs:
+            try:
+                ref_img_url = None
+                ref_obj = db.query(PersonnelImage).filter(PersonnelImage.id == log.ref_img_id).first() 
+                img = cv2.imread(log.face_image_path)
+                if ref_obj is not None:
+                    ref_img_url = ref_obj.image_url
+                if ref_img_url:
+                    ref_img = cv2.imread(ref_img_url)
+                    img = cv2.hconcat([img, ref_img])
+
+                _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                face_image_base64 = base64.b64encode(buffer).decode('utf-8')
+            except Exception as e:
+                print(f'error encoding face image: {e}')
+                face_image_base64 = None
+            
+            video_url = None
+            if log.video_path and os.path.exists(log.video_path):
+                video_url = f"{base_url}/api/v1/detections/{log.id}/video"
+            
+            # Calculate full name if personnel exists
+            full_name = 'Unknown'
+            person_value = log.person
+            
+            if person_value:
+                personnel = personnel_lookup.get(person_value)
+                if personnel:
+                    full_name = f"{personnel.fname} {personnel.lname}".strip()
+                else:
+                    full_name = person_value
+            
+            area = log.area if log.area else 'بدون ناحیه'
+            
+            logs_data.append({
+                "id": log.id,
+                "area": area,
+                "person": log.person,
+                "full_name": full_name,
+                "confidence": float(log.confidence) if log.confidence is not None else 0.0,
+                "detection_time": log.detection_time.isoformat() if log.detection_time else None,
+                "face_image_base64": face_image_base64,
+                "video_url": video_url
+            })
+        
+        # Send initial detections to the specific client
+        initial_data = {
+            "type": "initial_detections",
+            "detections": logs_data
+        }
+        
+        await websocket.send_json(initial_data)
+        print(f"📊 Sent initial {len(logs_data)} detections to new client")
+        
+    except Exception as e:
+        print(f"Error sending initial detections: {e}")
+    finally:
+        db.close()
 
 
 # Global state
@@ -419,12 +502,12 @@ async def send_hossein():
             })
         
         detection_info = {
-            "type": "new_detection",
+            "type": "detections_update",
             "detection": logs_data
         }
         
         await manager.broadcast_json(detection_info)
-        print(f"📊 Broadcast to {manager.count} clients")
+        print(f"📊 Broadcast {len(logs_data)} detections to {manager.count} clients")
     finally:
         db.close()
 
@@ -993,4 +1076,3 @@ async def global_exception_handler(request, exc):
 
 
 
- 
