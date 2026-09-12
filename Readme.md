@@ -1,35 +1,26 @@
-## Running Qdrant
+# Face Recognition Service with Vector Search
 
-```
-docker run -p 7000:6333 -p 7001:6334 -v "$(pwd)//Qdrant:/qdrant/storage:z" qdrant/qdrant
-```
+This repository contains an experimental face-recognition backend that combines GPU-based face processing with vector similarity search and a web API. It includes application code, database migrations, Docker deployment material, and Qdrant integration used during development.
 
-alembic revision --autogenerate -m "add area to log table"
-alembic upgrade head
-docker run --gpus all -v "${pwd}:/app" -p 8000:8000 -w /app face_recognition:v1 python3 run.py
+## Components
 
-```
-docker run --gpus all -v "${pwd}:/app" -p 8000:8000 -w /app cuda_torch_tensorrt_detection_extra1:latest uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
-```
+The working tree contains:
 
-```
-docker run --gpus all -it -v "${pwd}:/app" face_qdrant:latest bash
+- a backend API service;
+- face-processing modules;
+- Qdrant vector search;
+- database migrations through Alembic;
+- Docker/GPU execution paths;
+- utilities for generating and testing detection records.
 
--   uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+## Development Services
 
--   /usr/local/bin/qdrant --config-path /etc/qdrant/config.yaml
+Qdrant can be started locally with Docker and the API can be run with Uvicorn. Exact model paths, collection names, thresholds, and deployment parameters should be configured for the target environment rather than hard-coded into application code.
 
-```
+## Scope
 
-docker build -t ai_qdrant_combined .
+The project explores end-to-end integration of face detection/recognition, embedding search, API services, and persistent metadata. It is primarily an engineering prototype and should not be treated as a biometric benchmark implementation.
 
-'python webcam_retina_arcface.py --camera 0 --collection n3 --threshold 0.5'
+## Privacy and Data Handling
 
-'uvicorn app.main:app --reload --host 0.0.0.0 --port 8000'
-uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
-
-docker run --gpus all -v "${pwd}:/app" -p 8000:8000 -w /app ai_qdrant_combined:latest uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
-
-```
-
-```
+Face images, embeddings, identity metadata, and application databases are sensitive biometric data. Public repositories should contain only synthetic or explicitly shareable examples. Local Qdrant storage and application database files should be excluded from version control for a public research portfolio.
